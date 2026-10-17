@@ -368,7 +368,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
     assert_eq!(records.len(), 1, "Exactly 1 VM record expected (LXC dns-server excluded)");
     let r = &records[0];
 
-    // Assert exact values matching Python test_live_pve_host_payload_end_to_end
+    // Assert exact values matching live PVE host payload end to end
     assert_eq!(r.get("name").unwrap(), "app-server");
     assert_eq!(r.get("external_id").unwrap(), "101");
     assert_eq!(r.get("platform").unwrap(), "proxmox");

@@ -2,7 +2,7 @@
 
 Extract VM inventory from a Proxmox cluster via REST API and write a CSV compatible with **InventoryMGR's bulk import schema**.
 
-Implemented in high-performance **Rust** with concurrent extraction workers, with a reference **Python 3** implementation included.
+Implemented in high-performance **Rust** with concurrent extraction workers.
 
 ## Build (Rust)
 
@@ -182,7 +182,6 @@ Fallback: if guest agent is not available, IPs are extracted from Proxmox `tags`
 - **Runs on a Proxmox host** (or machine with API access to port 8006)
 - Proxmox VE 7.x / 8.x / 9.x
 - Rust 1.80+ (for building the Rust binary)
-- Python 3.11+ (if running the reference Python script)
 - `root@pam` credentials (or user/token with `VM.Audit` + `Datastore.Audit`)
 
 ## Examples
@@ -222,21 +221,7 @@ inventorymgr import /tmp/inventory.csv
 
 ## Contract Testing
 
-Validate generated CSV against InventoryMGR's actual parser (requires InventoryMGR origin/main):
-
-```bash
-# Generate test CSV
-./target/release/proxmox-inventory-extract -o /tmp/test-inventory.csv
-
-# Run contract test (requires InventoryMGR backend at origin/main ea6f8b6)
-python3 contract_test.py /tmp/test-inventory.csv
-```
-
-The contract test:
-- Feeds CSV into `parse_csv_bytes` → `normalize_csv_row`
-- Fails if any columns are ignored or validation errors occur
-- Reports `[PASS]` with row count on success
-- See `contract_test.py` for details
+The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates that the generated CSV strictly conforms to InventoryMGR's 39-column schema (`TEMPLATE_COLUMNS`), RFC 4180 CRLF formatting, and sanitization invariants.
 
 ## How It Works
 
@@ -326,19 +311,15 @@ proxmox-inventory-extract/
 │   ├── model_test.rs                 # Parsing & classification tests
 │   ├── probe_test.rs                 # Local probe tests
 │   └── parity_test.rs                # Live PVE 9.2.10 mock parity test
-├── proxmox-inventory-extract.py      # Reference Python extractor
-├── test_proxmox_inventory_extract.py # Python unit tests
-├── contract_test.py                  # Cross-repo contract test
-├── conftest.py                       # pytest loader for hyphen-named script
 └── README.md                         # Documentation
 ```
 
 ### Running Tests
 
 ```bash
-# Rust test suite
+# Run tests
 cargo test
 
-# Python test suite
-python3 -m pytest test_proxmox_inventory_extract.py -v
+# Run linter
+cargo clippy --all-targets -- -D warnings
 ```

@@ -427,7 +427,7 @@ pub fn resource_num(
     }
 }
 
-/// InventoryMGR os_family ('linux' | 'windows' | '').
+/// InventoryMGR os_family ('linux' | 'windows').
 pub fn map_os_family(ostype: &str, guest_os_family: Option<&str>) -> &'static str {
     if let Some(g) = guest_os_family {
         let g_fam = g.trim().to_ascii_lowercase();
@@ -445,9 +445,6 @@ pub fn map_os_family(ostype: &str, guest_os_family: Option<&str>) -> &'static st
     }
     if ot.starts_with('w') {
         return "windows";
-    }
-    if !ot.is_empty() {
-        return "";
     }
 
     "linux"

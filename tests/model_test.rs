@@ -226,9 +226,11 @@ fn test_map_os_family_cases() {
     assert_eq!(map_os_family("l24", None), "linux");
     assert_eq!(map_os_family("win11", None), "windows");
     assert_eq!(map_os_family("w2k8", None), "windows");
-    assert_eq!(map_os_family("solaris", None), "");
-    assert_eq!(map_os_family("other", None), "");
-    assert_eq!(map_os_family("freebsd", None), "");
+    assert_eq!(map_os_family("solaris", None), "linux");
+    assert_eq!(map_os_family("other", None), "linux");
+    assert_eq!(map_os_family("freebsd", None), "linux");
+
+    assert_eq!(map_os_family("win11", Some("unknown")), "windows");
 
     // guest_os_family when ostype is empty
     assert_eq!(map_os_family("", Some("debian")), "linux");
@@ -339,4 +341,3 @@ fn test_config_ips_and_macs() {
     let tag_ips = extract_ips_from_tags("app; 192.168.1.15; web; 10.0.0.25");
     assert_eq!(tag_ips, vec!["192.168.1.15", "10.0.0.25"]);
 }
-

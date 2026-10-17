@@ -431,18 +431,15 @@ pub async fn extract_vm(
     }
 
     if fqdn.is_none() && probe_enabled {
-        let mut candidate_ips: Vec<String> = Vec::new();
-        if let Some(priv_ips) = ips_by_role.get("private_ip") {
-            candidate_ips.extend(priv_ips.iter().cloned());
-        }
-        if let Some(back_ips) = ips_by_role.get("backup_ip") {
-            candidate_ips.extend(back_ips.iter().cloned());
-        }
-        for ip in candidate_ips {
-            let ptr = reverse_dns(&ip, probe_timeout).await;
-            if !ptr.is_empty() {
-                fqdn = Some(ptr);
-                break;
+        'search: for role in ["private_ip", "backup_ip", "public_ip"] {
+            if let Some(role_ips) = ips_by_role.get(role) {
+                for ip in role_ips {
+                    let ptr = reverse_dns(ip, probe_timeout).await;
+                    if !ptr.is_empty() {
+                        fqdn = Some(ptr);
+                        break 'search;
+                    }
+                }
             }
         }
     }

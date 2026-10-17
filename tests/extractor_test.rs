@@ -1,7 +1,8 @@
 use proxmox_inventory_extract::cli::{Args, AuthMethod};
 use proxmox_inventory_extract::client::ProxmoxClient;
 use proxmox_inventory_extract::extractor::{
-    build_storage_meta, build_volume_sizes, extract_vm, run_orchestrator, serialize_vm,
+    build_storage_meta, build_volume_sizes, extract_vm, run_orchestrator,
+    serialize_vm,
 };
 use proxmox_inventory_extract::model::DiskRecord;
 use serde_json::json;
@@ -9,8 +10,10 @@ use std::collections::{HashMap, HashSet};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-/// Helper: spawns a mock Proxmox server for testing extraction
-async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<()>) {
+async fn spawn_mock_extractor_server_with_node_status(
+    node_status: &'static str,
+    node_body: serde_json::Value,
+) -> (String, tokio::sync::oneshot::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -20,6 +23,7 @@ async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<
             tokio::select! {
                 _ = &mut shutdown_rx => break,
                 Ok((mut stream, _)) = listener.accept() => {
+                    let node_body_str = node_body.to_string();
                     tokio::spawn(async move {
                         let mut buf = vec![0u8; 8192];
                         let n = match stream.read(&mut buf).await {
@@ -53,12 +57,8 @@ async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<
                                 }).to_string(),
                             ),
                             "/api2/json/nodes" => (
-                                "200 OK",
-                                json!({
-                                    "data": [
-                                        {"node": "pve-node1", "status": "online"}
-                                    ]
-                                }).to_string(),
+                                node_status,
+                                node_body_str,
                             ),
                             "/api2/json/cluster/resources?type=vm" => (
                                 "200 OK",
@@ -263,6 +263,18 @@ async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<
     });
 
     (format!("http://127.0.0.1:{}", addr.port()), shutdown_tx)
+}
+
+async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<()>) {
+    spawn_mock_extractor_server_with_node_status(
+        "200 OK",
+        json!({
+            "data": [
+                {"node": "pve-node1", "status": "online"}
+            ]
+        }),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -854,67 +866,15 @@ async fn test_build_volume_sizes_concurrency_and_cap() {
 
 #[tokio::test]
 async fn test_orchestrator_node_enumeration_failure_exit_1() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = &mut shutdown_rx => break,
-                Ok((mut stream, _)) = listener.accept() => {
-                    tokio::spawn(async move {
-                        let mut buf = vec![0u8; 4096];
-                        let n = match stream.read(&mut buf).await {
-                            Ok(n) if n > 0 => n,
-                            _ => return,
-                        };
-                        let req_str = String::from_utf8_lossy(&buf[..n]);
-                        let first_line = req_str.lines().next().unwrap_or("");
-                        let parts: Vec<&str> = first_line.split_whitespace().collect();
-                        let path = parts.get(1).copied().unwrap_or("");
-
-                        let (status, body) = match path {
-                            "/api2/json/access/ticket" => (
-                                "200 OK",
-                                json!({
-                                    "data": {
-                                        "ticket": "MOCK_TICKET",
-                                        "CSRFPreventionToken": "MOCK_CSRF"
-                                    }
-                                }).to_string(),
-                            ),
-                            "/api2/json/cluster/status" => (
-                                "200 OK",
-                                json!({
-                                    "data": [
-                                        {"type": "cluster", "name": "test-cluster"}
-                                    ]
-                                }).to_string(),
-                            ),
-                            "/api2/json/nodes" => (
-                                "500 Internal Server Error",
-                                json!({"message": "nodes failure"}).to_string(),
-                            ),
-                            _ => ("404 Not Found", "{}".to_string()),
-                        };
-
-                        let resp = format!(
-                            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            status,
-                            body.len(),
-                            body
-                        );
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                    });
-                }
-            }
-        }
-    });
+    let (server_url, shutdown_tx) = spawn_mock_extractor_server_with_node_status(
+        "500 Internal Server Error",
+        json!({"message": "nodes failure"}),
+    )
+    .await;
 
     let args = Args {
         output: None,
-        host: addr.to_string(),
+        host: server_url,
         user: "root@pam".to_string(),
         password: Some("secret".to_string()),
         api_token: None,

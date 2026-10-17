@@ -43,14 +43,6 @@ export PVE_API_TOKEN="root@pam!inventory=12345678-1234-1234-1234-123456789abc"
 ./target/release/proxmox-inventory-extract -o /tmp/inventory.csv
 ```
 
-### Python Script
-
-```bash
-# On a Proxmox host (needs network access to API on port 8006)
-export PVE_PASSWORD="your-root-password"
-./proxmox-inventory-extract.py -o /tmp/inventory.csv
-```
-
 ## Options
 
 | Flag | Description | Default |
@@ -257,7 +249,7 @@ LV/volume name extracted from config value (e.g., `vg01:vm-100-disk-0` → `vm-1
 
 ### OS Detection
 
-Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux`.
+Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux` (unrecognized or missing `ostype` defaults to `linux`).
 
 ### Description
 

@@ -222,10 +222,14 @@ def test_config_macs():
 
 
 def test_classify_ips():
-    ips = ["10.1.1.1", "172.16.5.9", "203.0.113.7"]
+    ips = ["10.1.1.1", "172.16.5.9", "202.54.1.1", "203.0.113.7"]
     result = classify_ips(ips)
-    assert result == {"backup_ip": ["10.1.1.1"], "private_ip": ["172.16.5.9", "203.0.113.7"]}
-    assert "public_ip" not in result
+    assert result == {
+        "backup_ip": ["10.1.1.1"],
+        "public_ip": ["202.54.1.1"],
+        "private_ip": ["172.16.5.9", "203.0.113.7"],
+    }
+
 
 
 def test_read_arp_table(tmp_path):
@@ -269,10 +273,11 @@ def test_parse_tags():
 
 def test_map_os_family():
     assert map_os_family("l26", "ubuntu") == "linux"
+    assert map_os_family("other", "ubuntu") == "linux"
     assert map_os_family("freebsd", None) == ""
     assert map_os_family("", "ubuntu") == "linux"
     assert map_os_family("", "mswindows") == "windows"
-    assert map_os_family("", None) == ""
+    assert map_os_family("", None) == "linux" 
 
 def test_disk_record_csv_field():
     d = DiskRecord(
@@ -1069,3 +1074,29 @@ def test_live_pve_host_payload_end_to_end(tmp_path, monkeypatch):
     assert r["ha_enabled"] == "false"
     assert r["backup_enabled"] == "false"
     assert sanitize_row(dict(r)) == []
+def test_main_node_enumeration_failure_returns_1(monkeypatch, tmp_path):
+    from proxmox_inventory_extract import main, ProxmoxClient
+
+    class FailingNodeClient(ProxmoxClient):
+        def __init__(self, *args, **kwargs):
+            pass
+        def get_ticket(self):
+            pass
+        def get_cluster_name(self):
+            return "standalone"
+        def get_nodes(self):
+            raise RuntimeError("Proxmox API /nodes returned 500 Internal Server Error")
+
+    csv_out = str(tmp_path / "out.csv")
+    monkeypatch.setattr("sys.argv", ["proxmox-inventory-extract.py", "-o", csv_out, "-p", "dummy"])
+    monkeypatch.setattr("proxmox_inventory_extract.ProxmoxClient", lambda **kw: FailingNodeClient())
+    rc = main()
+    assert rc == 1
+
+def test_parse_args_api_token():
+    args = parse_args(["--api-token", "root@pam!tok=12345678-1234-1234-1234-123456789abc"])
+    assert args.api_token == "root@pam!tok=12345678-1234-1234-1234-123456789abc"
+
+def test_api_token_header():
+    client = ProxmoxClient(host="localhost:8006", user="root@pam", password="", verify_ssl=False, api_token="root@pam!tok=123")
+    assert client._headers() == {"Authorization": "PVEAPIToken=root@pam!tok=123"}

@@ -243,7 +243,11 @@ pub fn serialize_vm(
         .map(|v| v.join(";"))
         .unwrap_or_default();
     row.insert("private_ip".to_string(), priv_ips);
-    row.insert("public_ip".to_string(), String::new());
+    let pub_ips = ips_by_role
+        .get("public_ip")
+        .map(|v| v.join(";"))
+        .unwrap_or_default();
+    row.insert("public_ip".to_string(), pub_ips);
     let backup_ips = ips_by_role
         .get("backup_ip")
         .map(|v| v.join(";"))
@@ -427,7 +431,7 @@ pub async fn extract_vm(
     }
 
     if fqdn.is_none() && probe_enabled {
-        let mut candidate_ips = Vec::new();
+        let mut candidate_ips: Vec<String> = Vec::new();
         if let Some(priv_ips) = ips_by_role.get("private_ip") {
             candidate_ips.extend(priv_ips.iter().cloned());
         }
@@ -563,10 +567,8 @@ pub async fn run_orchestrator(args: Args) -> i32 {
             n
         }
         Err(e) => {
-            eprintln!("[warn] Failed to fetch nodes: {}", e);
-            eprintln!("[warn] No online nodes found");
-            partial_failure = true;
-            Vec::new()
+            eprintln!("[error] Failed to fetch nodes: {}", e);
+            return 1;
         }
     };
 

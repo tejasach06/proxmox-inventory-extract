@@ -122,13 +122,17 @@ class DiskRecord:
 class ProxmoxClient:
     host: str
     user: str
-    password: str
-    verify_ssl: bool
+    password: str = ""
+    verify_ssl: bool = False
     timeout: int = API_TIMEOUT
+    api_token: Optional[str] = None
     ticket: str = ""
     csrf: str = ""
     _ctx: Optional[ssl.SSLContext] = None
+
     def get_ticket(self) -> None:
+        if self.api_token:
+            return
         url = f"https://{self.host}/api2/json/access/ticket"
         data = urllib.parse.urlencode({"username": self.user, "password": self.password}).encode()
         req = urllib.request.Request(url, data=data, method="POST")
@@ -147,6 +151,8 @@ class ProxmoxClient:
         return self._ctx
 
     def _headers(self) -> dict[str, str]:
+        if self.api_token:
+            return {"Authorization": f"PVEAPIToken={self.api_token}"}
         return {
             "Cookie": f"PVEAuthCookie={self.ticket}",
             "CSRFPreventionToken": self.csrf,
@@ -269,6 +275,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-H", "--host", default="127.0.0.1:8006", help="Proxmox API endpoint (default: %(default)s)")
     parser.add_argument("-u", "--user", default="root@pam", help="Proxmox username (default: %(default)s)")
     parser.add_argument("-p", "--password", help="Password (or use PVE_PASSWORD env)")
+    parser.add_argument("--api-token", help="Proxmox API Token (or use PVE_API_TOKEN env)")
     parser.add_argument("--verify-ssl", action="store_true", help="Verify the Proxmox TLS certificate (default: skipped, since Proxmox ships a self-signed cert)")
     parser.add_argument("--version", action="version", version="proxmox-inventory-extract 2026-08-15")
     parser.add_argument("--timeout", type=int, default=API_TIMEOUT, help="Per-request HTTP timeout in seconds (default: %(default)s)")
@@ -452,13 +459,18 @@ def config_macs(config: dict) -> list[str]:
 
 
 def classify_ips(ips: list[str]) -> dict[str, list[str]]:
-    """10/8 is the backup network; every other usable IPv4 is private. public_ip stays human-curated."""
-    result = {"private_ip": [], "backup_ip": []}
+    """10/8 is the backup network; 202/8 is public; every other usable IPv4 is private."""
+    result = {"private_ip": [], "public_ip": [], "backup_ip": []}
     for raw_ip in dict.fromkeys(ips):
         ip = valid_ipv4(raw_ip)
         if not ip:
             continue
-        result["backup_ip" if ip.startswith("10.") else "private_ip"].append(ip)
+        if ip.startswith("10."):
+            result["backup_ip"].append(ip)
+        elif ip.startswith("202."):
+            result["public_ip"].append(ip)
+        else:
+            result["private_ip"].append(ip)
     return result
 ARP_PATH = "/proc/net/arp"
 DNSMASQ_LEASE_GLOBS = ("/var/lib/misc/dnsmasq.*.leases", "/var/lib/dnsmasq/*.leases")
@@ -581,26 +593,25 @@ def total_vcpus(config: dict) -> str:
     return str(cores * sockets)
 
 def map_os_family(ostype: str, guest_os_family: Optional[str]) -> str:
-    """InventoryMGR os_family ('linux' | 'windows' | '').
+    """InventoryMGR os_family (linux | windows | ).
 
-    Proxmox ostype values are l24/l26 (linux), w*/win* (windows), and
-    solaris/other/*bsd (unmappable). The guest-agent id only resolves a
-    missing ostype.
+    Precedence: Guest agent OS family > ostype mapping > linux default.
     """
-    ot = (ostype or "").lower()
+    g_fam = (guest_os_family or "").lower().strip()
+    if g_fam in AGENT_LINUX_IDS:
+        return "linux"
+    if "windows" in g_fam or "mswin" in g_fam:
+        return "windows"
+
+    ot = (ostype or "").lower().strip()
     if ot.startswith("l"):
         return "linux"
     if ot.startswith("w"):
         return "windows"
     if ot:
         return ""  # solaris, other, *bsd: not importable
-    g_fam = (guest_os_family or "").lower()
-    if g_fam in AGENT_LINUX_IDS:
-        return "linux"
-    if "windows" in g_fam or "mswin" in g_fam:
-        return "windows"
-    return ""
 
+    return "linux"
 
 def backup_coverage(jobs: list[dict], vmid: int, pool: str) -> tuple[str, str]:
     """(backup_enabled, backup_location) from vzdump job config."""
@@ -686,6 +697,7 @@ def serialize_vm(
 
     # Network
     row["private_ip"] = MULTI_SEP.join(ips_by_role["private_ip"])
+    row["public_ip"] = MULTI_SEP.join(ips_by_role.get("public_ip", []))
     row["backup_ip"] = MULTI_SEP.join(ips_by_role.get("backup_ip", []))
 
     # Ownership
@@ -851,12 +863,19 @@ def extract_vm(
 
 def main() -> int:
     args = parse_args(sys.argv[1:])
-    password = resolve_password(args)
+    token = getattr(args, "api_token", None) or os.environ.get("PVE_API_TOKEN")
+    if token and token.strip():
+        password = ""
+        api_token = token.strip()
+    else:
+        password = resolve_password(args)
+        api_token = None
 
     client = ProxmoxClient(
         host=args.host,
         user=args.user,
         password=password,
+        api_token=api_token,
         verify_ssl=args.verify_ssl,
         timeout=args.timeout,
     )
@@ -875,7 +894,11 @@ def main() -> int:
         cluster_name = "standalone"
         partial_failure = True
 
-    nodes = client.get_nodes()
+    try:
+        nodes = client.get_nodes()
+    except Exception as e:
+        print(f"[error] Failed to fetch nodes: {e}", file=sys.stderr)
+        return 1
     if not nodes:
         print("[warn] No online nodes found", file=sys.stderr)
     try:

@@ -113,6 +113,14 @@ impl StorageMeta {
             vgname: vgname.into(),
         }
     }
+
+    pub fn display_name(&self) -> &str {
+        if !self.vgname.is_empty() {
+            &self.vgname
+        } else {
+            &self.storage_id
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,14 +257,7 @@ pub fn parse_disks(
         }
 
         let (storage_name, storage_type) = match storage_meta.get(&storage_id) {
-            Some(meta) => {
-                let name = if !meta.vgname.is_empty() {
-                    meta.vgname.clone()
-                } else {
-                    storage_id.clone()
-                };
-                (name, meta.storage_type.clone())
-            }
+            Some(meta) => (meta.display_name().to_string(), meta.storage_type.clone()),
             None => (storage_id.clone(), String::new()),
         };
 
@@ -294,6 +295,7 @@ pub fn valid_ipv4(value: &str) -> String {
 pub fn classify_ips(ips: &[String]) -> HashMap<&'static str, Vec<String>> {
     let mut result = HashMap::new();
     let mut private_ip = Vec::new();
+    let mut public_ip = Vec::new();
     let mut backup_ip = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -307,12 +309,15 @@ pub fn classify_ips(ips: &[String]) -> HashMap<&'static str, Vec<String>> {
         }
         if ip.starts_with("10.") {
             backup_ip.push(ip);
+        } else if ip.starts_with("202.") {
+            public_ip.push(ip);
         } else {
             private_ip.push(ip);
         }
     }
 
     result.insert("private_ip", private_ip);
+    result.insert("public_ip", public_ip);
     result.insert("backup_ip", backup_ip);
     result
 }
@@ -424,6 +429,16 @@ pub fn resource_num(
 
 /// InventoryMGR os_family ('linux' | 'windows' | '').
 pub fn map_os_family(ostype: &str, guest_os_family: Option<&str>) -> &'static str {
+    if let Some(g) = guest_os_family {
+        let g_fam = g.trim().to_ascii_lowercase();
+        if AGENT_LINUX_IDS.contains(&g_fam.as_str()) {
+            return "linux";
+        }
+        if g_fam.contains("windows") || g_fam.contains("mswin") {
+            return "windows";
+        }
+    }
+
     let ot = ostype.trim().to_ascii_lowercase();
     if ot.starts_with('l') {
         return "linux";
@@ -434,16 +449,8 @@ pub fn map_os_family(ostype: &str, guest_os_family: Option<&str>) -> &'static st
     if !ot.is_empty() {
         return "";
     }
-    if let Some(g) = guest_os_family {
-        let g_fam = g.trim().to_ascii_lowercase();
-        if AGENT_LINUX_IDS.contains(&g_fam.as_str()) {
-            return "linux";
-        }
-        if g_fam.contains("windows") || g_fam.contains("mswin") {
-            return "windows";
-        }
-    }
-    ""
+
+    "linux"
 }
 
 /// Extract and join Proxmox tags with semicolon.

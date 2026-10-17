@@ -851,3 +851,82 @@ async fn test_build_volume_sizes_concurrency_and_cap() {
     assert_eq!(sizes.get("c:disk"), Some(&30));
     assert_eq!(peak.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn test_orchestrator_node_enumeration_failure_exit_1() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = &mut shutdown_rx => break,
+                Ok((mut stream, _)) = listener.accept() => {
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 4096];
+                        let n = match stream.read(&mut buf).await {
+                            Ok(n) if n > 0 => n,
+                            _ => return,
+                        };
+                        let req_str = String::from_utf8_lossy(&buf[..n]);
+                        let first_line = req_str.lines().next().unwrap_or("");
+                        let parts: Vec<&str> = first_line.split_whitespace().collect();
+                        let path = parts.get(1).copied().unwrap_or("");
+
+                        let (status, body) = match path {
+                            "/api2/json/access/ticket" => (
+                                "200 OK",
+                                json!({
+                                    "data": {
+                                        "ticket": "MOCK_TICKET",
+                                        "CSRFPreventionToken": "MOCK_CSRF"
+                                    }
+                                }).to_string(),
+                            ),
+                            "/api2/json/cluster/status" => (
+                                "200 OK",
+                                json!({
+                                    "data": [
+                                        {"type": "cluster", "name": "test-cluster"}
+                                    ]
+                                }).to_string(),
+                            ),
+                            "/api2/json/nodes" => (
+                                "500 Internal Server Error",
+                                json!({"message": "nodes failure"}).to_string(),
+                            ),
+                            _ => ("404 Not Found", "{}".to_string()),
+                        };
+
+                        let resp = format!(
+                            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            status,
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    });
+                }
+            }
+        }
+    });
+
+    let args = Args {
+        output: None,
+        host: addr.to_string(),
+        user: "root@pam".to_string(),
+        password: Some("secret".to_string()),
+        api_token: None,
+        verify_ssl: false,
+        timeout: 5,
+        no_probe: true,
+        probe_timeout: 1.0,
+        workers: 1,
+        quiet: true,
+    };
+
+    let exit_code = run_orchestrator(args).await;
+    let _ = shutdown_tx.send(());
+    assert_eq!(exit_code, 1, "Failed node enumeration must return exit code 1");
+}

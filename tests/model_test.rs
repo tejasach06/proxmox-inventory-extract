@@ -151,11 +151,16 @@ fn test_classify_ips_cases() {
         "10.20.0.1".to_string(),
         "127.0.0.1".to_string(), // invalid/loopback
         "172.16.0.2".to_string(),
+        "202.54.1.1".to_string(),
     ];
     let classified = classify_ips(&ips);
     assert_eq!(
         classified.get("backup_ip").unwrap(),
         &vec!["10.10.0.1".to_string(), "10.20.0.1".to_string()]
+    );
+    assert_eq!(
+        classified.get("public_ip").unwrap(),
+        &vec!["202.54.1.1".to_string()]
     );
     assert_eq!(
         classified.get("private_ip").unwrap(),
@@ -212,7 +217,11 @@ fn test_resource_num_cases() {
 
 #[test]
 fn test_map_os_family_cases() {
-    // ostype takes precedence
+    // guest agent has priority
+    assert_eq!(map_os_family("other", Some("ubuntu")), "linux");
+    assert_eq!(map_os_family("l26", Some("windows 11")), "windows");
+
+    // ostype takes precedence if guest agent absent
     assert_eq!(map_os_family("l26", None), "linux");
     assert_eq!(map_os_family("l24", None), "linux");
     assert_eq!(map_os_family("win11", None), "windows");
@@ -221,14 +230,16 @@ fn test_map_os_family_cases() {
     assert_eq!(map_os_family("other", None), "");
     assert_eq!(map_os_family("freebsd", None), "");
 
-    // fallback to guest_os_family when ostype is empty
+    // guest_os_family when ostype is empty
     assert_eq!(map_os_family("", Some("debian")), "linux");
     assert_eq!(map_os_family("", Some("ubuntu")), "linux");
     assert_eq!(map_os_family("", Some("alpine")), "linux");
     assert_eq!(map_os_family("", Some("windows 11")), "windows");
     assert_eq!(map_os_family("", Some("mswin10")), "windows");
-    assert_eq!(map_os_family("", Some("unknown")), "");
-    assert_eq!(map_os_family("", None), "");
+
+    // default to linux when unmapped or empty
+    assert_eq!(map_os_family("", Some("unknown")), "linux");
+    assert_eq!(map_os_family("", None), "linux");
 }
 
 #[test]

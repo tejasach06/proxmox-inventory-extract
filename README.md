@@ -9,16 +9,20 @@ Implemented in high-performance **Rust** with concurrent extraction workers.
 Build the optimized release binary using Cargo:
 
 ```bash
-cargo build --release
+cargo build --release --locked
 ```
 
-The compiled binary is written to `target/release/proxmox-inventory-extract`.
+The compiled binary is written to `target/release/proxmox-inventory-extract`. On memory-constrained nodes, pass `-j1` to limit concurrent compiler jobs:
+
+```bash
+cargo build --release --locked -j1
+```
 
 Run the test suite and linter:
 
 ```bash
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
 ## Quick Start
@@ -51,15 +55,15 @@ export PVE_API_TOKEN="root@pam!inventory=12345678-1234-1234-1234-123456789abc"
 | `-H, --host HOST:PORT` | Proxmox API endpoint | `127.0.0.1:8006` |
 | `-u, --user USER@REALM` | Proxmox username | `root@pam` |
 | `-p, --password PASS` | Password for ticket auth (or use `PVE_PASSWORD` env) | prompts interactively if TTY |
-| `--api-token TOKEN` | Proxmox API Token (or use `PVE_API_TOKEN` env) | — |
+| `--api-token TOKEN` | Proxmox API Token (or use `PVE_API_TOKEN` env) | None |
 | `--verify-ssl` | Verify the Proxmox TLS certificate | skipped (Proxmox ships a self-signed cert) |
 | `--timeout SECONDS` | Per-request HTTP timeout in seconds | `30` |
 | `--no-probe` | Disable reverse DNS and local ARP/DHCP lease lookups | probing enabled |
 | `--probe-timeout SECONDS` | Reverse DNS timeout in seconds | `2.0` |
 | `--workers N` | Concurrent VM extraction workers and per-node storage-content requests | `8` |
 | `--quiet` | Suppress the progress line | progress shown on a TTY |
-| `-V, --version` | Show version and exit | — |
-| `-h, --help` | Show help and exit | — |
+| `-V, --version` | Show version and exit | None |
+| `-h, --help` | Show help and exit | None |
 
 ## Authentication Precedence
 
@@ -74,20 +78,21 @@ Credentials are automatically resolved according to strict precedence:
 ## Output CSV Schema
 
 Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
+
 | Column | Source |
 |--------|--------|
 | `name` | VM config `name` |
 | `external_id` | Proxmox VMID (string) |
-| `fqdn` | Guest agent hostname (only if dotted FQDN; else blank) |
-| `sr_id` | *(empty — not available from Proxmox)* |
+| `fqdn` | Guest agent hostname > local DHCP lease > reverse DNS PTR (`private_ip` > `backup_ip` > `public_ip`) > `<name>.<searchdomain>` |
+| `sr_id` | *(empty - not available from Proxmox)* |
 | `platform` | always `proxmox` |
-| `datacenter` | *(empty — not available from Proxmox)* |
+| `datacenter` | *(empty - not available from Proxmox)* |
 | `cluster` | `/cluster/status` name or `standalone` |
 | `node` | Proxmox node name |
 | `status` | `running` / `powered_off` / `unknown` (from Proxmox status) |
-| `environment` | *(empty — not available from Proxmox)* |
-| `criticality` | *(empty — not available from Proxmox)* |
-| `vm_type` | *(empty — not available from Proxmox)* |
+| `environment` | *(empty - not available from Proxmox)* |
+| `criticality` | *(empty - not available from Proxmox)* |
+| `vm_type` | *(empty - not available from Proxmox)* |
 | `cpu_cores` | VM config cores x sockets (each defaults to 1) |
 | `memory_mb` | VM config `memory` |
 | `disks` | `;`-separated `disk_name:size_GiB:storage_name:storage_type` |
@@ -99,21 +104,21 @@ Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
 | `private_ip` | Guest agent IPs starting with `172.` (or unmatched) |
 | `public_ip` | Guest agent IPs starting with `202.` |
 | `backup_ip` | Guest agent IPs starting with `10.` |
-| `owner` | *(empty — not available from Proxmox)* |
-| `business_owner` | *(empty — not available from Proxmox)* |
-| `technical_owner` | *(empty — not available from Proxmox)* |
-| `applications` | *(empty — not available from Proxmox)* |
-| `monitoring_enabled` | *(empty — not available from Proxmox)* |
-| `pmp_enabled` | *(empty — not available from Proxmox)* |
+| `owner` | *(empty - not available from Proxmox)* |
+| `business_owner` | *(empty - not available from Proxmox)* |
+| `technical_owner` | *(empty - not available from Proxmox)* |
+| `applications` | *(empty - not available from Proxmox)* |
+| `monitoring_enabled` | *(empty - not available from Proxmox)* |
+| `pmp_enabled` | *(empty - not available from Proxmox)* |
 | `ha_enabled` | `true` if VM is configured in Proxmox HA (`/cluster/ha/resources`), else `false` |
 | `backup_enabled` | `true` if VM is covered by a cluster backup job (`/cluster/backup`), else `false` |
 | `backup_location` | Proxmox backup storage target ID if backed up, else empty |
 | `tags` | Proxmox tags, `;`-joined |
-| `last_patch_date` | *(empty — not available from Proxmox)* |
-| `last_vuln_scan_date` | *(empty — not available from Proxmox)* |
-| `last_verified_at` | *(empty — not available from Proxmox)* |
-| `decommission_date` | *(empty — not available from Proxmox)* |
-| `security_remarks` | *(empty — not available from Proxmox)* |
+| `last_patch_date` | *(empty - not available from Proxmox)* |
+| `last_vuln_scan_date` | *(empty - not available from Proxmox)* |
+| `last_verified_at` | *(empty - not available from Proxmox)* |
+| `decommission_date` | *(empty - not available from Proxmox)* |
+| `security_remarks` | *(empty - not available from Proxmox)* |
 | `description` | Proxmox VM config `description` field verbatim |
 
 All 39 InventoryMGR columns are emitted; unused columns are empty strings.
@@ -134,7 +139,6 @@ disk_name:size_GiB:storage_name:storage_type
 | `storage_type` | Proxmox storage plugin type (e.g., `lvm`, `lvm-thin`, `zfspool`, `iscsi`, `rbd`, `dir`) |
 
 **Example:**
-
 ```
 vm-100-disk-0-scsi0:50:vg01:lvm;vm-100-disk-1-scsi1:100:vg01:lvm;vm-100-disk-2-virtio0:32:vg02:lvm-thin
 ```
@@ -159,15 +163,23 @@ Fallback: if guest agent is not available, IPs are extracted from Proxmox `tags`
 
 ## FQDN Behavior
 
-`fqdn` is populated **only** when the QEMU Guest Agent returns a dotted hostname (contains `.` and not `localhost`). Short hostnames are rejected. If guest agent is unavailable or returns no dotted hostname, reverse DNS and local DHCP lease hostnames are consulted before falling back to `<name>.<searchdomain>`.
+`fqdn` is resolved using a deterministic multi-tier fallback:
+
+1. **QEMU Guest Agent**: Accepted when `/agent/get-host-name` returns a dotted hostname (contains `.` and does not start with `localhost`). Short hostnames without domains are rejected at this stage.
+2. **Local DHCP Leases**: When probing is enabled and the command executes on the local Proxmox node, hostnames matching discovered VM MAC addresses in `/var/lib/misc/dnsmasq.leases` or `/var/lib/dhcp/dhcpd.leases` are evaluated.
+3. **Reverse DNS PTR**: When probing is enabled, PTR lookups run against candidate IP addresses in role order (`private_ip` first, then `backup_ip`, then `public_ip`). Lookups terminate on the first resolved non-empty PTR name.
+4. **Searchdomain Fallback**: If no prior tier resolved an FQDN, the VM name is joined with the VM configuration `searchdomain` (`<name>.<searchdomain>`).
+5. **Blank**: If all fallback steps fail, `fqdn` remains empty.
+
+Passing `--no-probe` disables tiers 2 and 3, suppressing local lease inspection and reverse DNS network traffic.
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success — all VMs extracted |
-| `1` | Fatal error — authentication, node enumeration, or CSV write failed |
-| `2` | Partial failure — one or more nodes/VMs skipped (see stderr warnings) |
+| `0` | Success: all VMs extracted |
+| `1` | Fatal error: authentication, node enumeration, or CSV write failed |
+| `2` | Partial failure: one or more nodes/VMs skipped (see stderr warnings) |
 
 ## Requirements
 
@@ -213,16 +225,21 @@ inventorymgr import /tmp/inventory.csv
 
 ## Contract Testing
 
-The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates that the generated CSV strictly conforms to InventoryMGR's 39-column schema (`TEMPLATE_COLUMNS`), RFC 4180 CRLF formatting, and sanitization invariants.
+The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates that the generated CSV strictly conforms to InventoryMGR's import requirements:
+- All 39 `TEMPLATE_COLUMNS` present in exact order
+- Correct RFC 4180 quoting and CRLF / LF line endings
+- Valid enum values for `status`, `os_family`, `storage_type`, etc.
+- Boolean fields are lowercase `true` / `false`
+- Numeric fields (`cpu_cores`, `memory_mb`) parse as valid integers
 
 ## How It Works
 
-1. **Authenticate** — Ticket auth (`POST /api2/json/access/ticket`) or API Token auth (`Authorization: PVEAPIToken=...`)
-2. **Get cluster status** — `/api2/json/cluster/status` for cluster name
-3. **Enumerate nodes** — `/api2/json/nodes` (online only)
-4. **Enumerate backup & HA jobs** — `/api2/json/cluster/backup` and `/api2/json/cluster/ha/resources`
-5. **Enumerate QEMU VMs** — `/api2/json/cluster/resources?type=vm` (with fallback to `/api2/json/nodes/<node>/qemu`)
-6. **Fetch storage config & volume sizes** — `/api2/json/nodes/<node>/storage`, then fetch its storage content endpoints concurrently (up to `--workers` requests per node)
+1. **Authenticate**: Ticket auth (`POST /api2/json/access/ticket`) or API Token auth (`Authorization: PVEAPIToken=...`)
+2. **Get cluster status**: `/api2/json/cluster/status` for cluster name
+3. **Enumerate nodes**: `/api2/json/nodes` (online only)
+4. **Enumerate backup & HA jobs**: `/api2/json/cluster/backup` and `/api2/json/cluster/ha/resources`
+5. **Enumerate QEMU VMs**: `/api2/json/cluster/resources?type=vm` (with fallback to `/api2/json/nodes/<node>/qemu`)
+6. **Fetch storage config & volume sizes**: `/api2/json/nodes/<node>/storage`, then query storage content endpoints (`/api2/json/nodes/<node>/storage/<storage>/content`) for disk volume sizes
 7. **Extract VM details in parallel workers**:
    - VM config: `/api2/json/nodes/<node>/qemu/<vmid>/config`
    - Guest agent info: `/agent/info`
@@ -236,50 +253,53 @@ The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates t
 ## Special Handling
 
 ### Disk Parsing
-
 Supported Proxmox config keys: `scsi*`, `virtio*`, `sata*`, `ide*`, `efidisk*`, `tpmstate*`.
-
 Skipped: `none`, `media=cdrom`, entries without parseable `size=`.
-
-LV/volume name extracted from config value (e.g., `vg01:vm-100-disk-0` → `vm-100-disk-0`).
+LV/volume name extracted from config value (e.g., `vg01:vm-100-disk-0` -> `vm-100-disk-0`).
 
 ### External ID
-
-`external_id` = Proxmox VMID (string). Matches InventoryMGR's uniqueness constraint: `(platform, external_id)` when non-null.
+`external_id` = Proxmox VMID (string). Matches InventoryMGR's uniqueness constraint: `(platform, external_id)` when non-empty.
 
 ### OS Detection
+Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux`.
+- **Guest Agent**: Evaluates `id`, `name`, or OS family returned by `/agent/get-osinfo`.
+- **Config `ostype` mapping**:
+  - `l*` (e.g., `l26`, `l24`) maps to `linux`.
+  - `w*` (e.g., `win11`, `win10`, `w2k8`) maps to `windows`.
+  - Missing or unrecognized `ostype` values (e.g., `other`, `solaris`, `freebsd`) default to `linux` to satisfy InventoryMGR CSV constraints.
 
-Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux` (unrecognized or missing `ostype` defaults to `linux`).
+### FQDN Resolution
+Priority: Guest Agent dotted hostname > local DHCP lease hostname > reverse DNS PTR > config `<name>.<searchdomain>`.
+- **Reverse DNS PTR search order**: `private_ip` > `backup_ip` > `public_ip`.
+- **Probing guard**: `--no-probe` bypasses local DHCP lease files and reverse DNS PTR lookups.
 
 ### Description
-
 Proxmox VM config `description` field copied verbatim to InventoryMGR `description` column.
 
 ### Tags
-
 Proxmox tags (from VM config `tags` field) are `;`-joined.
 
 ## Troubleshooting
 
 **SSL certificate verification failed**
-- Pass `--verify-ssl` only once your Proxmox host has a trusted certificate; by default verification is skipped since Proxmox ships a self-signed cert
+- Pass `--verify-ssl` only once your Proxmox host has a trusted certificate; by default verification is skipped since Proxmox installs a self-signed certificate.
 
 **Authentication failed**
-- Verify username/realm: `root@pam`, `admin@pve`, `user@pam`
-- Check user has `VM.Audit` and `Datastore.Audit` permissions
+- Verify username/realm: `root@pam`, `admin@pve`, `user@pam`.
+- Check user has `VM.Audit` and `Datastore.Audit` permissions.
 
 **No guest agent IPs**
-- Ensure QEMU Guest Agent is installed and running in VM
-- Check `agent: 1` in VM config
-- IPs only appear when guest agent is active
+- Ensure QEMU Guest Agent is installed and running in the VM.
+- Check `agent: 1` in VM config.
+- IPs only appear when guest agent is active.
 
 **Empty cluster name**
-- Single-node (no cluster) returns `standalone`
-- Cluster must be configured in Proxmox GUI
+- Single-node (no cluster) returns `standalone`.
+- Cluster must be configured in Proxmox GUI.
 
 **Partial extraction (exit 2)**
-- Check stderr for `[warn]` lines indicating skipped nodes/VMs
-- Common: offline nodes, VMs without readable config
+- Check stderr for `[warn]` lines indicating skipped nodes/VMs.
+- Common causes: offline nodes, VMs without readable config.
 
 ## File Layout
 
@@ -310,8 +330,8 @@ proxmox-inventory-extract/
 
 ```bash
 # Run tests
-cargo test
+cargo test --locked
 
 # Run linter
-cargo clippy --all-targets -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 ```

@@ -395,11 +395,7 @@ impl ProxmoxClient {
     /// Fetches online nodes from `/nodes`.
     pub async fn get_nodes(&self) -> Result<Vec<String>, String> {
         let data = self.api_get("/api2/json/nodes").await?;
-        let list = match data {
-            Value::Array(arr) => arr,
-            Value::Null => Vec::new(),
-            _ => return Err("nodes endpoint returned non-array".to_string()),
-        };
+        let list = into_list(data, "nodes endpoint")?;
 
         let nodes = list
             .iter()
@@ -413,11 +409,7 @@ impl ProxmoxClient {
     /// Fetches all QEMU guest resources cluster-wide from `/cluster/resources?type=vm`.
     pub async fn get_cluster_vms(&self) -> Result<Vec<Value>, String> {
         let data = self.api_get("/api2/json/cluster/resources?type=vm").await?;
-        let list = match data {
-            Value::Array(arr) => arr,
-            Value::Null => Vec::new(),
-            _ => return Err("cluster/resources endpoint returned non-array".to_string()),
-        };
+        let list = into_list(data, "cluster/resources endpoint")?;
 
         let filtered = list
             .into_iter()
@@ -436,11 +428,7 @@ impl ProxmoxClient {
     pub async fn get_vms_for_node(&self, node: &str) -> Result<Vec<Value>, String> {
         let path = format!("/api2/json/nodes/{}/qemu", node);
         let data = self.api_get(&path).await?;
-        match data {
-            Value::Array(arr) => Ok(arr),
-            Value::Null => Ok(Vec::new()),
-            _ => Err(format!("{}/qemu endpoint returned non-array", node)),
-        }
+        into_list(data, &format!("{}/qemu endpoint", node))
     }
 
     /// Fetches configuration dictionary for a VM from `/nodes/{node}/qemu/{vmid}/config`.
@@ -457,11 +445,7 @@ impl ProxmoxClient {
     pub async fn get_storage_config(&self, node: &str) -> Result<Vec<Value>, String> {
         let path = format!("/api2/json/nodes/{}/storage", node);
         let data = self.api_get(&path).await?;
-        match data {
-            Value::Array(arr) => Ok(arr),
-            Value::Null => Ok(Vec::new()),
-            _ => Err(format!("{}/storage endpoint returned non-array", node)),
-        }
+        into_list(data, &format!("{}/storage endpoint", node))
     }
 
     /// Fetches image content for a specific storage from `/nodes/{node}/storage/{storage}/content?content=images`.
@@ -471,21 +455,13 @@ impl ProxmoxClient {
             node, storage
         );
         let data = self.api_get(&path).await?;
-        match data {
-            Value::Array(arr) => Ok(arr),
-            Value::Null => Ok(Vec::new()),
-            _ => Err(format!("{}/content endpoint returned non-array", storage)),
-        }
+        into_list(data, &format!("{}/content endpoint", storage))
     }
 
     /// Fetches backup jobs list from `/cluster/backup`.
     pub async fn get_backup_jobs(&self) -> Result<Vec<Value>, String> {
         let data = self.api_get("/api2/json/cluster/backup").await?;
-        match data {
-            Value::Array(arr) => Ok(arr),
-            Value::Null => Ok(Vec::new()),
-            _ => Err("cluster/backup endpoint returned non-array".to_string()),
-        }
+        into_list(data, "cluster/backup endpoint")
     }
 
     /// Fetches VMIDs managed by High Availability from `/cluster/ha/resources`.
@@ -569,5 +545,14 @@ impl ProxmoxClient {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         Vec::new()
+    }
+}
+
+/// PVE list endpoints return `null` when empty; anything but array/null is an error.
+fn into_list(data: Value, what: &str) -> Result<Vec<Value>, String> {
+    match data {
+        Value::Array(arr) => Ok(arr),
+        Value::Null => Ok(Vec::new()),
+        _ => Err(format!("{} returned non-array", what)),
     }
 }

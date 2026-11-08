@@ -58,8 +58,7 @@ export PVE_API_TOKEN="root@pam!inventory=12345678-1234-1234-1234-123456789abc"
 | `--api-token TOKEN` | Proxmox API Token (or use `PVE_API_TOKEN` env) | None |
 | `--verify-ssl` | Verify the Proxmox TLS certificate | skipped (Proxmox ships a self-signed cert) |
 | `--timeout SECONDS` | Per-request HTTP timeout in seconds | `30` |
-| `--no-probe` | Disable reverse DNS and local ARP/DHCP lease lookups | probing enabled |
-| `--probe-timeout SECONDS` | Reverse DNS timeout in seconds | `2.0` |
+| `--no-probe` | Disable local ARP/DHCP lease lookups | probing enabled |
 | `--workers N` | Concurrent VM extraction workers and per-node storage-content requests | `8` |
 | `--quiet` | Suppress the progress line | progress shown on a TTY |
 | `-V, --version` | Show version and exit | None |
@@ -83,7 +82,7 @@ Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
 |--------|--------|
 | `name` | VM config `name` |
 | `external_id` | Proxmox VMID (string) |
-| `fqdn` | Guest agent hostname > local DHCP lease > reverse DNS PTR (`private_ip` > `backup_ip` > `public_ip`) > `<name>.<searchdomain>` |
+| `virtual_hosts` | Apache/nginx vhosts from the guest agent (`;`-joined, sorted). See [Virtual Hosts Behavior](#virtual-hosts-behavior) |
 | `sr_id` | *(empty - not available from Proxmox)* |
 | `platform` | always `proxmox` |
 | `datacenter` | *(empty - not available from Proxmox)* |
@@ -145,7 +144,7 @@ vm-100-disk-0-scsi0:50:vg01:lvm;vm-100-disk-1-scsi1:100:vg01:lvm;vm-100-disk-2-v
 
 - Per-disk `storage_name` and `storage_type` fields
 - `vgname` preferred; falls back to Proxmox storage ID
-- EFI (`efidisk*`) and TPM (`tpmstate*`) disks included
+- EFI (`efidisk*`) and TPM (`tpmstate*`) firmware disks skipped
 - CDROM (`media=cdrom`) and `none` entries skipped
 
 ## IP Classification
@@ -161,17 +160,14 @@ Guest agent IPs are classified by prefix (longest match wins):
 
 Fallback: if guest agent is not available, IPs are extracted from Proxmox `tags` field via regex, or probed via local ARP table and DHCP leases if running on the local Proxmox node.
 
-## FQDN Behavior
+## Virtual Hosts Behavior
 
-`fqdn` is resolved using a deterministic multi-tier fallback:
+`virtual_hosts` lists the Apache/nginx virtual hosts served by the VM, joined with `;`. One VM can host many sites.
 
-1. **QEMU Guest Agent**: Accepted when `/agent/get-host-name` returns a dotted hostname (contains `.` and does not start with `localhost`). Short hostnames without domains are rejected at this stage.
-2. **Local DHCP Leases**: When probing is enabled and the command executes on the local Proxmox node, hostnames matching discovered VM MAC addresses in `/var/lib/misc/dnsmasq.leases` or `/var/lib/dhcp/dhcpd.leases` are evaluated.
-3. **Reverse DNS PTR**: When probing is enabled, PTR lookups run against candidate IP addresses in role order (`private_ip` first, then `backup_ip`, then `public_ip`). Lookups terminate on the first resolved non-empty PTR name.
-4. **Searchdomain Fallback**: If no prior tier resolved an FQDN, the VM name is joined with the VM configuration `searchdomain` (`<name>.<searchdomain>`).
-5. **Blank**: If all fallback steps fail, `fqdn` remains empty.
-
-Passing `--no-probe` disables tiers 2 and 3, suppressing local lease inspection and reverse DNS network traffic.
+- **Source**: QEMU guest agent `agent/exec` runs `apachectl -S` (or `apache2ctl`/`httpd`) and `nginx -T`, then extracts `namevhost`/`alias`/`server_name` names.
+- **Requirements**: VM `running`, qemu-guest-agent responding, resolved `os_family` is `linux`.
+- **Permissions**: on PVE 9 the token/user needs `VM.GuestAgent.Unrestricted` (older PVE: `Sys.Modify` or `VM.Monitor`) for agent exec.
+- **Otherwise**: the column is empty. There is no hostname, DHCP, reverse DNS or searchdomain fallback.
 
 ## Exit Codes
 
@@ -253,7 +249,7 @@ The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates t
 ## Special Handling
 
 ### Disk Parsing
-Supported Proxmox config keys: `scsi*`, `virtio*`, `sata*`, `ide*`, `efidisk*`, `tpmstate*`.
+Supported Proxmox config keys: `scsi*`, `virtio*`, `sata*`, `ide*`.
 Skipped: `none`, `media=cdrom`, entries without parseable `size=`.
 LV/volume name extracted from config value (e.g., `vg01:vm-100-disk-0` -> `vm-100-disk-0`).
 
@@ -268,10 +264,11 @@ Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux`.
   - `w*` (e.g., `win11`, `win10`, `w2k8`) maps to `windows`.
   - Missing or unrecognized `ostype` values (e.g., `other`, `solaris`, `freebsd`) default to `linux` to satisfy InventoryMGR CSV constraints.
 
-### FQDN Resolution
-Priority: Guest Agent dotted hostname > local DHCP lease hostname > reverse DNS PTR > config `<name>.<searchdomain>`.
-- **Reverse DNS PTR search order**: `private_ip` > `backup_ip` > `public_ip`.
-- **Probing guard**: `--no-probe` bypasses local DHCP lease files and reverse DNS PTR lookups.
+### Virtual Hosts
+Source: guest agent exec of `apachectl -S` / `apache2ctl -S` / `httpd -S` plus `nginx -T` `server_name` lines. Names are lowercased, deduplicated, sorted, joined with `;`.
+- Requires a running VM, qemu-guest-agent, and a Linux guest.
+- On PVE 9 the token/user needs `VM.GuestAgent.Unrestricted` (older PVE: `Sys.Modify` / `VM.Monitor`) for agent exec.
+- Empty otherwise; no DNS or DHCP fallback.
 
 ### Description
 Proxmox VM config `description` field copied verbatim to InventoryMGR `description` column.
@@ -313,7 +310,7 @@ proxmox-inventory-extract/
 │   ├── client.rs                     # Proxmox REST API client (Ticket & API Token)
 │   ├── extractor.rs                  # Concurrent extraction engine & orchestrator
 │   ├── model.rs                      # Data models, disk parser & IP classifier
-│   ├── probe.rs                      # Local ARP/DHCP lease parser & reverse DNS
+│   ├── probe.rs                      # Local ARP/DHCP lease IP parser
 │   └── csv.rs                        # Row sanitization & RFC 4180 CSV serializer
 ├── tests/
 │   ├── cli_test.rs                   # CLI & credential resolution tests

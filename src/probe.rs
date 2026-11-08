@@ -40,12 +40,9 @@ pub fn read_arp_table(path: &str) -> HashMap<String, Vec<String>> {
     res
 }
 
-/// (mac -> IPv4s, mac -> hostname) from dnsmasq leases: 'expiry mac ip hostname clientid'.
-pub fn read_dhcp_leases(
-    globs: &[&str],
-) -> (HashMap<String, Vec<String>>, HashMap<String, String>) {
+/// mac -> IPv4s from dnsmasq leases: 'expiry mac ip hostname clientid'.
+pub fn read_dhcp_leases(globs: &[&str]) -> HashMap<String, Vec<String>> {
     let mut mac_to_ips: HashMap<String, Vec<String>> = HashMap::new();
-    let mut mac_to_host: HashMap<String, String> = HashMap::new();
     let mut seen_files: HashSet<PathBuf> = HashSet::new();
 
     for &pattern in globs {
@@ -74,10 +71,10 @@ pub fn read_dhcp_leases(
             };
             for line in content.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() < 4 {
+                if parts.len() < 3 {
                     continue;
                 }
-                let (mac_raw, ip_raw, host_raw) = (parts[1], parts[2], parts[3]);
+                let (mac_raw, ip_raw) = (parts[1], parts[2]);
                 let mac = mac_raw.to_ascii_lowercase();
                 let v_ip = valid_ipv4(ip_raw);
                 if !v_ip.is_empty() && !mac.is_empty() {
@@ -86,42 +83,9 @@ pub fn read_dhcp_leases(
                         entry.push(v_ip);
                     }
                 }
-                if !host_raw.is_empty()
-                    && host_raw != "*"
-                    && !mac.is_empty()
-                    && host_raw.contains('.')
-                    && !host_raw.starts_with("localhost")
-                {
-                    mac_to_host.insert(mac, host_raw.to_string());
-                }
             }
         }
     }
 
-    (mac_to_ips, mac_to_host)
-}
-
-/// PTR name for ip when it is a dotted non-localhost name, else ''.
-pub async fn reverse_dns(ip: &str, timeout_secs: f64) -> String {
-    let host_part = ip.trim().split('/').next().unwrap_or("").trim();
-    if host_part.is_empty() {
-        return String::new();
-    }
-    let ip_addr: std::net::IpAddr = match host_part.parse() {
-        Ok(addr) => addr,
-        Err(_) => return String::new(),
-    };
-
-    let timeout_duration = std::time::Duration::from_secs_f64(timeout_secs.max(0.0));
-    let lookup = tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&ip_addr));
-    let res = match tokio::time::timeout(timeout_duration, lookup).await {
-        Ok(Ok(Ok(name))) => name,
-        _ => return String::new(),
-    };
-    let trimmed = res.trim();
-    if !trimmed.is_empty() && trimmed.contains('.') && !trimmed.starts_with("localhost") {
-        trimmed.to_string()
-    } else {
-        String::new()
-    }
+    mac_to_ips
 }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const TEMPLATE_COLUMNS: [&str; 39] = [
     "name",
     "external_id",
-    "fqdn",
+    "virtual_hosts",
     "sr_id",
     "platform",
     "datacenter",
@@ -67,8 +67,9 @@ pub const AGENT_LINUX_IDS: &[&str] = &[
     "ubuntu",
 ];
 
+// efidisk/tpmstate are firmware state, not data disks; their 4M/1M size would round up to 1 GiB.
 pub static DISK_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:scsi|virtio|ide|sata|unused|efidisk|tpmstate)\d+$").unwrap()
+    Regex::new(r"^(?:scsi|virtio|ide|sata|unused)\d+$").unwrap()
 });
 
 static SIZE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -252,7 +253,7 @@ pub fn parse_disks(
         }
 
         if lv_name.is_empty() {
-            eprintln!("[warn] Skipping malformed disk {}={}", key, val_str);
+            eprintln!("[warn] Skipping disk {}={}: not a storage volume (passthrough or unrecognized)", key, val_str);
             continue;
         }
 

@@ -11,7 +11,6 @@ fn test_cli_defaults() {
     assert_eq!(args.timeout, 30);
     assert_eq!(args.workers, 8);
     assert!(!args.no_probe);
-    assert_eq!(args.probe_timeout, 2.0);
     assert!(!args.quiet);
     assert!(args.output.is_none());
 }

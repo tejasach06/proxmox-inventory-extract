@@ -162,29 +162,37 @@ pub fn parse_guest_ips(data: &Value) -> Vec<String> {
     ips
 }
 
-/// Parses guest FQDN from `/agent/get-host-name` output.
-pub fn parse_guest_fqdn(data: &Value) -> Option<String> {
-    let obj = if let Some(r) = data.get("result").and_then(|r| r.as_object()) {
-        r
-    } else {
-        data.as_object()?
+const VHOST_SCRIPT: &str = "for c in apachectl apache2ctl httpd; do command -v $c >/dev/null 2>&1 && { $c -S 2>&1; break; }; done; command -v nginx >/dev/null 2>&1 && nginx -T 2>/dev/null | sed 's/#.*//' | grep -oE 'server_name[[:space:]][^;]*;'; true";
+
+/// Parses web vhost names from `apachectl -S` and `nginx -T | grep server_name` output.
+/// Returns lowercase, deduplicated, sorted hostnames; drops `_`, localhost, IPs and dotless names.
+pub fn parse_virtual_hosts(output: &str) -> Vec<String> {
+    let mut set = std::collections::BTreeSet::new();
+    let mut add = |tok: &str| {
+        let t = tok.trim().trim_end_matches(';').to_lowercase();
+        if t.is_empty()
+            || t == "_"
+            || t == "localhost"
+            || t == "localhost.localdomain"
+            || !t.contains('.')
+            || t.parse::<std::net::IpAddr>().is_ok()
+        {
+            return;
+        }
+        set.insert(t);
     };
-
-    let host_name = obj
-        .get("host-name")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-    let hostname = obj
-        .get("hostname")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-
-    let h = host_name.or(hostname)?;
-    if h.contains('.') && !h.starts_with("localhost") {
-        Some(h.to_string())
-    } else {
-        None
+    for raw in output.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        match toks.as_slice() {
+            ["server_name", names @ ..] => names.iter().for_each(|n| add(n)),
+            [.., "namevhost", host, _] | [.., "namevhost", host] => add(host),
+            ["alias", host] => add(host),
+            [first, host, ..] if first.starts_with('*') && first.contains(':') => add(host),
+            _ => {}
+        }
     }
+    set.into_iter().collect()
 }
 
 /// HTTP client for Proxmox VE REST API with ticket or API token authentication.
@@ -307,11 +315,7 @@ impl ProxmoxClient {
         }
     }
 
-    /// Performs an authenticated GET request against the given path and unwraps `data`.
-    pub async fn api_get(&self, path: &str) -> Result<Value, String> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.get(&url);
-
+    fn with_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.auth {
             AuthMethod::ApiToken { token } => {
                 req = req.header("Authorization", format!("PVEAPIToken={}", token));
@@ -327,9 +331,17 @@ impl ProxmoxClient {
                 }
             }
         }
+        req
+    }
 
-        let resp = req.send().await.map_err(|e| {
-            let msg = format!("GET {} failed: {}", path, e);
+    async fn send_api(
+        &self,
+        method: &str,
+        path: &str,
+        req: reqwest::RequestBuilder,
+    ) -> Result<Value, String> {
+        let resp = self.with_auth(req).send().await.map_err(|e| {
+            let msg = format!("{} {} failed: {}", method, path, e);
             eprintln!("[warn] {}", msg);
             msg
         })?;
@@ -337,18 +349,34 @@ impl ProxmoxClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            let msg = format!("GET {} failed with HTTP {}: {}", path, status, text);
+            let msg = format!("{} {} failed with HTTP {}: {}", method, path, status, text);
             eprintln!("[warn] {}", msg);
             return Err(msg);
         }
 
         let body: Value = resp.json().await.map_err(|e| {
-            let msg = format!("GET {} failed to parse JSON: {}", path, e);
+            let msg = format!("{} {} failed to parse JSON: {}", method, path, e);
             eprintln!("[warn] {}", msg);
             msg
         })?;
 
         Ok(unwrap_response(body))
+    }
+
+    /// Performs an authenticated GET request against the given path and unwraps `data`.
+    pub async fn api_get(&self, path: &str) -> Result<Value, String> {
+        let req = self.client.get(format!("{}{}", self.base_url, path));
+        self.send_api("GET", path, req).await
+    }
+
+    /// Performs an authenticated form POST against the given path and unwraps `data`.
+    /// Repeated keys in `form` are sent repeatedly (PVE array params).
+    pub async fn api_post(&self, path: &str, form: &[(&str, &str)]) -> Result<Value, String> {
+        let req = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .form(form);
+        self.send_api("POST", path, req).await
     }
 
     /// Performs an authenticated GET request for a QEMU guest agent endpoint, unwrapping `result`.
@@ -510,11 +538,36 @@ impl ProxmoxClient {
         }
     }
 
-    /// Fetches guest FQDN via `/agent/get-host-name`.
-    pub async fn get_guest_fqdn(&self, node: &str, vmid: u64) -> Option<String> {
-        match self.agent_get(node, vmid, "get-host-name").await {
-            Ok(data) => parse_guest_fqdn(&data),
-            Err(_) => None,
+    /// Lists web vhosts served by the guest via `/agent/exec` (apachectl -S, nginx -T). Soft-fails to empty.
+    pub async fn get_guest_virtual_hosts(&self, node: &str, vmid: u64) -> Vec<String> {
+        let base = format!("/api2/json/nodes/{}/qemu/{}/agent", node, vmid);
+        let form = [
+            ("command", "/bin/sh"),
+            ("command", "-c"),
+            ("command", VHOST_SCRIPT),
+        ];
+        let Ok(started) = self.api_post(&format!("{}/exec", base), &form).await else {
+            return Vec::new();
+        };
+        let Some(pid) = started.get("pid").and_then(|p| p.as_u64()) else {
+            return Vec::new();
+        };
+        let status_path = format!("{}/exec-status?pid={}", base, pid);
+        for _ in 0..25 {
+            let Ok(status) = self.api_get(&status_path).await else {
+                return Vec::new();
+            };
+            let exited = match status.get("exited") {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+                _ => false,
+            };
+            if exited {
+                let out = status.get("out-data").and_then(|v| v.as_str()).unwrap_or("");
+                return parse_virtual_hosts(out);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        Vec::new()
     }
 }

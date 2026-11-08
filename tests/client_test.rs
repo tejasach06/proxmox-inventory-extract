@@ -1,6 +1,6 @@
 use proxmox_inventory_extract::cli::AuthMethod;
 use proxmox_inventory_extract::client::{
-    parse_cluster_name, parse_guest_fqdn, parse_guest_ips, parse_guest_os, parse_ha_vmids,
+    parse_cluster_name, parse_guest_ips, parse_guest_os, parse_ha_vmids, parse_virtual_hosts,
     unwrap_agent_result, unwrap_response, ProxmoxClient,
 };
 use serde_json::json;
@@ -179,7 +179,7 @@ fn test_parse_guest_os_combinations() {
 }
 
 #[test]
-fn test_parse_guest_ips_and_fqdn() {
+fn test_parse_guest_ips() {
     let iface_data = json!([
         {
             "name": "lo",
@@ -206,28 +206,67 @@ fn test_parse_guest_ips_and_fqdn() {
     ]);
     let ips = parse_guest_ips(&iface_data);
     assert_eq!(ips, vec!["192.168.1.25", "10.0.0.5"]);
+}
 
-    // FQDN valid dotted non-localhost
-    let fqdn1 = json!({"host-name": "web01.corp.example"});
-    assert_eq!(
-        parse_guest_fqdn(&fqdn1),
-        Some("web01.corp.example".to_string())
-    );
-
-    // FQDN unqualified (no dot)
-    let fqdn2 = json!({"host-name": "workstation"});
-    assert_eq!(parse_guest_fqdn(&fqdn2), None);
-
-    // FQDN localhost prefix
-    let fqdn3 = json!({"host-name": "localhost.localdomain"});
-    assert_eq!(parse_guest_fqdn(&fqdn3), None);
-
-    // Fallback to "hostname" key
-    let fqdn4 = json!({"hostname": "db01.corp.internal"});
-    assert_eq!(
-        parse_guest_fqdn(&fqdn4),
-        Some("db01.corp.internal".to_string())
-    );
+#[test]
+fn test_parse_virtual_hosts_cases() {
+    let apache = "\
+VirtualHost configuration:
+*:80                   is a NameVirtualHost
+         default server www.example.com (/etc/apache2/sites-enabled/000-default.conf:1)
+         port 80 namevhost www.example.com (/etc/apache2/sites-enabled/000-default.conf:1)
+                 alias WWW2.example.com
+         port 80 namevhost shop.example.com (/etc/apache2/sites-enabled/shop.conf:1)
+*:443                  blog.example.com (/etc/apache2/sites-enabled/blog.conf:2)
+         port 80 namevhost localhost (/etc/apache2/sites-enabled/l.conf:1)
+         port 80 namevhost 10.0.0.5 (/etc/apache2/sites-enabled/ip.conf:1)
+ServerRoot: \"/etc/apache2\"
+Main DocumentRoot: \"/var/www/html\"
+";
+    let nginx = "\
+    server_name a.example.com b.example.com;
+  server_name _;
+    server_name www.example.com  *.wild.example.com .dot.example.org localhost 192.168.1.1 ::1 intranet; # comment
+server_name   ;
+";
+    let cases: Vec<(String, Vec<&str>)> = vec![
+        (String::new(), vec![]),
+        (
+            apache.to_string(),
+            vec![
+                "blog.example.com",
+                "shop.example.com",
+                "www.example.com",
+                "www2.example.com",
+            ],
+        ),
+        (
+            nginx.to_string(),
+            vec![
+                "*.wild.example.com",
+                ".dot.example.org",
+                "a.example.com",
+                "b.example.com",
+                "www.example.com",
+            ],
+        ),
+        (
+            format!("{}{}", apache, nginx),
+            vec![
+                "*.wild.example.com",
+                ".dot.example.org",
+                "a.example.com",
+                "b.example.com",
+                "blog.example.com",
+                "shop.example.com",
+                "www.example.com",
+                "www2.example.com",
+            ],
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(parse_virtual_hosts(&input), expected, "input: {input}");
+    }
 }
 
 #[test]
@@ -435,13 +474,16 @@ async fn spawn_mock_pve_server() -> (String, tokio::sync::oneshot::Sender<()>) {
                                                 }
                                             }).to_string(),
                                         ),
-                                        "/api2/json/nodes/pve1/qemu/101/agent/get-host-name" => (
+                                        "/api2/json/nodes/pve1/qemu/101/agent/exec" if method == "POST" => (
+                                            "200 OK",
+                                            json!({"data": {"pid": 42}}).to_string(),
+                                        ),
+                                        "/api2/json/nodes/pve1/qemu/101/agent/exec-status?pid=42" => (
                                             "200 OK",
                                             json!({
                                                 "data": {
-                                                    "result": {
-                                                        "host-name": "app01.corp.example"
-                                                    }
+                                                    "exited": 1,
+                                                    "out-data": "*:80 www.example.com (/etc/apache2/sites-enabled/x.conf:1)\n    server_name a.example.com;\n"
                                                 }
                                             }).to_string(),
                                         ),
@@ -549,9 +591,9 @@ async fn test_client_ticket_authentication_and_all_endpoints() {
         &Some("12 (6.1.0-20-amd64)".to_string())
     );
 
-    // Guest agent FQDN
-    let fqdn = client.get_guest_fqdn("pve1", 101).await;
-    assert_eq!(fqdn, Some("app01.corp.example".to_string()));
+    // Guest virtual hosts via agent exec
+    let vhosts = client.get_guest_virtual_hosts("pve1", 101).await;
+    assert_eq!(vhosts, vec!["a.example.com", "www.example.com"]);
 }
 
 #[tokio::test]
@@ -626,7 +668,7 @@ async fn test_client_agent_error_graceful_handling() {
     assert_eq!(os.get("os_distribution").unwrap(), &None);
     assert_eq!(os.get("os_version").unwrap(), &None);
 
-    assert_eq!(client.get_guest_fqdn("pve1", 999).await, None);
+    assert!(client.get_guest_virtual_hosts("pve1", 999).await.is_empty());
 
     let _ = shutdown_tx.send(());
 }

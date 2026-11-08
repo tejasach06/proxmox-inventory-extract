@@ -1,4 +1,4 @@
-use proxmox_inventory_extract::probe::{read_arp_table, read_dhcp_leases, reverse_dns};
+use proxmox_inventory_extract::probe::{read_arp_table, read_dhcp_leases};
 use std::io::Write;
 
 #[test]
@@ -40,22 +40,12 @@ fn test_read_dhcp_leases() {
     writeln!(file1, "bad line").unwrap();
 
     let glob_pattern = format!("{}/dnsmasq*.leases", dir.path().to_str().unwrap());
-    let (mac_to_ips, mac_to_host) = read_dhcp_leases(&[&glob_pattern]);
+    let mac_to_ips = read_dhcp_leases(&[&glob_pattern]);
 
-    // mac_to_ips checks
     let ips_56 = mac_to_ips.get("52:54:00:12:34:56").unwrap();
     assert_eq!(ips_56, &vec!["192.168.1.101".to_string(), "192.168.1.105".to_string()]);
     assert_eq!(mac_to_ips.get("52:54:00:12:34:57").unwrap(), &vec!["192.168.1.102".to_string()]);
-
-    // mac_to_host checks
-    // 52:54:00:12:34:56 was updated by the last valid dotted entry
-    assert_eq!(mac_to_host.get("52:54:00:12:34:56").unwrap(), "vm101-alt.example.com");
-    // "*" ignored
-    assert!(!mac_to_host.contains_key("52:54:00:12:34:57"));
-    // "nodot" ignored (no dot)
-    assert!(!mac_to_host.contains_key("52:54:00:12:34:58"));
-    // "localhost.localdomain" ignored (starts with localhost)
-    assert!(!mac_to_host.contains_key("52:54:00:12:34:59"));
+    assert!(!mac_to_ips.contains_key("bad"));
 }
 
 #[test]
@@ -68,26 +58,9 @@ fn test_read_dhcp_leases_duplicate_file_in_globs() {
     let glob1 = format!("{}/dnsmasq.leases", dir.path().to_str().unwrap());
     let glob2 = format!("{}/*.leases", dir.path().to_str().unwrap());
 
-    let (mac_to_ips, _) = read_dhcp_leases(&[&glob1, &glob2]);
+    let mac_to_ips = read_dhcp_leases(&[&glob1, &glob2]);
     let ips = mac_to_ips.get("aa:bb:cc:11:22:33").unwrap();
     // Should only have processed the file once
     assert_eq!(ips.len(), 1);
     assert_eq!(ips[0], "192.168.1.200");
-}
-
-#[tokio::test]
-async fn test_reverse_dns_empty_and_invalid() {
-    assert_eq!(reverse_dns("", 1.0).await, "");
-    assert_eq!(reverse_dns("not-an-ip", 1.0).await, "");
-    assert_eq!(reverse_dns("127.0.0.1", 1.0).await, "");
-}
-
-#[tokio::test]
-async fn test_reverse_dns_timeout() {
-    // 192.0.2.1 is TEST-NET-1 (RFC 5737), which won't answer reverse DNS.
-    // With 1 millisecond timeout, it should timeout quickly and return "".
-    let start = std::time::Instant::now();
-    let res = reverse_dns("192.0.2.1", 0.001).await;
-    assert_eq!(res, "");
-    assert!(start.elapsed().as_secs_f64() < 1.0);
 }

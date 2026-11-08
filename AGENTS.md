@@ -20,7 +20,7 @@ flowchart LR
 
 `run_orchestrator` (`src/extractor.rs`) runs these steps in order:
 1. Authenticate, then fetch the cluster name, online nodes, backup jobs and HA resources.
-2. Load the probe tables.
+2. Load the ARP and DHCP lease tables.
 3. List VMs with `cluster/resources?type=vm`, keeping only `qemu/` IDs, so LXC is excluded. If that call fails or returns nothing, list VMs node by node and set the partial flag.
 4. Build per-node storage caches.
 5. Spawn one `tokio::spawn` task per VM, bounded by a `Semaphore` of size `--workers`. Shared state goes through `Arc`, and each row keeps its index so row order is preserved.
@@ -28,7 +28,7 @@ flowchart LR
 
 Each column value comes from the first source in its chain that produces a result:
 - **IPs:** guest agent (running VMs only) → cloud-init `ipconfigN` → IPs in tags → MAC lookup in ARP/DHCP. The MAC lookup only runs when the VM's node is the local short hostname.
-- **FQDN:** agent dotted hostname → DHCP lease hostname → reverse DNS over private, backup, then public IPs → `<name>.<searchdomain>` → blank.
+- **Virtual hosts:** guest agent exec only (`apachectl`/`apache2ctl`/`httpd -S` plus `nginx -T`), for running Linux guests with a live agent. Empty otherwise; no DNS, DHCP or searchdomain fallback.
 - **OS family:** agent osinfo → `ostype` mapping → `linux`.
 
 Exit codes: `0` ok, `1` fatal (auth, node enumeration or CSV write failed), `2` partial (a node or VM was skipped, or the VM-list fallback was used).
@@ -61,7 +61,7 @@ PVE_API_TOKEN='root@pam!inv=<uuid>' ./target/release/proxmox-inventory-extract -
 - **Errors:** functions return `Result<_, String>`. There is no `anyhow`, no `thiserror` and no custom error enum. The two exceptions are `ProxmoxClient::new`, which returns `reqwest::Error`, and `write_csv`, which returns `io::Error`. Do not add an error crate for a single call site.
 - **Logging:** use `eprintln!` with the prefixes `[warn]`, `[error]` and `[ok]`. Only the final `[ok]` line goes to stdout. `api_get` already logs its own failures, so callers that log again produce duplicate messages.
 - **Soft failures:** guest-agent and HA calls swallow errors and return empty or `None`. If a VM's config fetch fails, `extract_vm` returns a `None` row, which sets exit code 2. Keep that split: missing optional data never aborts the run.
-- **Async:** tokio (`full`) and reqwest 0.12 with `rustls-tls` and `default-features = false`. Never re-enable the reqwest default features (that brings in native-tls/OpenSSL). Blocking work such as DNS goes through `spawn_blocking` plus `tokio::time::timeout`.
+- **Async:** tokio (`full`) and reqwest 0.12 with `rustls-tls` and `default-features = false`. Never re-enable the reqwest default features (that brings in native-tls/OpenSSL). Blocking work goes through `spawn_blocking` plus `tokio::time::timeout`.
 - **Auth headers are set by hand in `api_get`:**
   - Tokens are sent as `Authorization: PVEAPIToken=<user@realm!id=uuid>`.
   - Tickets are sent as the `PVEAuthCookie` cookie plus a CSRF header.
@@ -82,12 +82,12 @@ PVE_API_TOKEN='root@pam!inv=<uuid>' ./target/release/proxmox-inventory-extract -
 | Path | Role |
 |---|---|
 | `src/main.rs` | Entry point: `#[tokio::main]`, parse args, exit with the orchestrator's code |
-| `src/cli.rs` | clap `Args` (defaults: host `127.0.0.1:8006`, user `root@pam`, timeout 30, workers 8, probe-timeout 2.0), `AuthMethod`, `resolve_credentials` |
+| `src/cli.rs` | clap `Args` (defaults: host `127.0.0.1:8006`, user `root@pam`, timeout 30, workers 8), `AuthMethod`, `resolve_credentials` |
 | `src/client.rs` | `ProxmoxClient` (auth, `api_get`, endpoint wrappers) plus pure JSON parsers |
 | `src/extractor.rs` | `run_orchestrator`, `extract_vm`, `serialize_vm`, storage caches, status mapping |
 | `src/model.rs` | `TEMPLATE_COLUMNS`, `DiskRecord`, disk/size/IP/OS/tag parsing, `backup_coverage` |
 | `src/csv.rs` | Column type sets, `sanitize_row`, RFC 4180 `write_csv` |
-| `src/probe.rs` | `read_arp_table(path)`, `read_dhcp_leases(globs)`, `reverse_dns`. Paths are parameters. These return empty off-Linux. |
+| `src/probe.rs` | `read_arp_table(path)`, `read_dhcp_leases(globs)` (mac → IPs). Paths are parameters. These return empty off-Linux. |
 | `Cargo.toml` | Dependencies; no profiles, lints, features or MSRV field (README says Rust 1.80+) |
 | `.gitignore` | Ignores `/target/`, `*.csv` and `*.log`. A committed CSV fixture must be force-added or renamed. |
 

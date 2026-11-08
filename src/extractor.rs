@@ -4,7 +4,6 @@ use crate::model::{
     backup_coverage, classify_ips, config_ips, config_macs, extract_ips_from_tags, map_os_family,
     parse_disks, parse_tags, resource_num, total_vcpus, DiskRecord, StorageMeta, TEMPLATE_COLUMNS,
 };
-use crate::probe::reverse_dns;
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
@@ -121,7 +120,7 @@ pub fn serialize_vm(
     disks: &[DiskRecord],
     ips_by_role: &HashMap<&str, Vec<String>>,
     os_info: &HashMap<String, Option<String>>,
-    fqdn: Option<&str>,
+    virtual_hosts: &[String],
     description: &str,
     tags: &str,
     resource: &serde_json::Value,
@@ -150,7 +149,7 @@ pub fn serialize_vm(
         .unwrap_or_else(|| format!("vm-{}", vmid));
     row.insert("name".to_string(), name);
     row.insert("external_id".to_string(), vmid.to_string());
-    row.insert("fqdn".to_string(), fqdn.unwrap_or("").to_string());
+    row.insert("virtual_hosts".to_string(), virtual_hosts.join(";"));
     row.insert("sr_id".to_string(), String::new());
     row.insert("platform".to_string(), "proxmox".to_string());
 
@@ -335,9 +334,7 @@ pub async fn extract_vm(
     local_node: &str,
     arp_map: Option<&HashMap<String, Vec<String>>>,
     lease_ips: Option<&HashMap<String, Vec<String>>>,
-    lease_hosts: Option<&HashMap<String, String>>,
     probe_enabled: bool,
-    probe_timeout: f64,
     ha_vmids: Option<&HashSet<u64>>,
 ) -> Option<HashMap<String, String>> {
     let config = match client.get_vm_config(node, vmid).await {
@@ -365,7 +362,7 @@ pub async fn extract_vm(
     os_info.insert("os_family".to_string(), None);
     os_info.insert("os_distribution".to_string(), None);
     os_info.insert("os_version".to_string(), None);
-    let mut fqdn: Option<String> = None;
+    let mut virtual_hosts: Vec<String> = Vec::new();
 
     if status == "running" && client.get_agent_info(node, vmid).await.is_some() {
         agent_live = true;
@@ -411,61 +408,14 @@ pub async fn extract_vm(
 
     if agent_live {
         os_info = client.get_guest_os(node, vmid).await;
-        fqdn = client.get_guest_fqdn(node, vmid).await;
+        let guest_fam = os_info.get("os_family").and_then(|v| v.as_deref());
+        let ostype = config.get("ostype").and_then(|v| v.as_str()).unwrap_or("");
+        if map_os_family(ostype, guest_fam) == "linux" {
+            virtual_hosts = client.get_guest_virtual_hosts(node, vmid).await;
+        }
     }
 
     let ips_by_role = classify_ips(&ips);
-
-    let macs = config_macs(&config);
-    if fqdn.is_none() && probe_enabled && node == local_node {
-        if let Some(hosts) = lease_hosts {
-            for mac in &macs {
-                if let Some(h) = hosts.get(mac) {
-                    if h.contains('.') && !h.starts_with("localhost") {
-                        fqdn = Some(h.clone());
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if fqdn.is_none() && probe_enabled {
-        'search: for role in ["private_ip", "backup_ip", "public_ip"] {
-            if let Some(role_ips) = ips_by_role.get(role) {
-                for ip in role_ips {
-                    let ptr = reverse_dns(ip, probe_timeout).await;
-                    if !ptr.is_empty() {
-                        fqdn = Some(ptr);
-                        break 'search;
-                    }
-                }
-            }
-        }
-    }
-
-    if fqdn.is_none() {
-        let searchdomain = config
-            .get("searchdomain")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        let vm_name = config
-            .get("name")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                resource
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-            })
-            .unwrap_or("")
-            .trim();
-        if !searchdomain.is_empty() && !vm_name.is_empty() {
-            fqdn = Some(format!("{}.{}", vm_name, searchdomain));
-        }
-    }
 
     let pool = resource
         .get("pool")
@@ -489,7 +439,7 @@ pub async fn extract_vm(
         &disks,
         &ips_by_role,
         &os_info,
-        fqdn.as_deref(),
+        &virtual_hosts,
         &description,
         &tags,
         resource,
@@ -584,15 +534,12 @@ pub async fn run_orchestrator(args: Args) -> i32 {
 
     let mut arp_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut lease_ips: HashMap<String, Vec<String>> = HashMap::new();
-    let mut lease_hosts: HashMap<String, String> = HashMap::new();
 
     let ha_vmids = client.get_ha_vmids().await;
 
     if probe_enabled {
         arp_map = crate::probe::read_arp_table(crate::probe::ARP_PATH);
-        let (lips, lhosts) = crate::probe::read_dhcp_leases(crate::probe::DNSMASQ_LEASE_GLOBS);
-        lease_ips = lips;
-        lease_hosts = lhosts;
+        lease_ips = crate::probe::read_dhcp_leases(crate::probe::DNSMASQ_LEASE_GLOBS);
     }
 
     let mut use_fallback = false;
@@ -703,7 +650,6 @@ pub async fn run_orchestrator(args: Args) -> i32 {
     let local_node_arc = Arc::new(local_node);
     let arp_map_arc = Arc::new(arp_map);
     let lease_ips_arc = Arc::new(lease_ips);
-    let lease_hosts_arc = Arc::new(lease_hosts);
     let ha_vmids_arc = Arc::new(ha_vmids);
 
     let mut handles = Vec::with_capacity(total);
@@ -717,10 +663,8 @@ pub async fn run_orchestrator(args: Args) -> i32 {
         let local_node = local_node_arc.clone();
         let arp_map = arp_map_arc.clone();
         let lease_ips = lease_ips_arc.clone();
-        let lease_hosts = lease_hosts_arc.clone();
         let ha_vmids = ha_vmids_arc.clone();
         let completed = completed.clone();
-        let probe_timeout = args.probe_timeout;
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
@@ -742,9 +686,7 @@ pub async fn run_orchestrator(args: Args) -> i32 {
                 &local_node,
                 Some(&arp_map),
                 Some(&lease_ips),
-                Some(&lease_hosts),
                 probe_enabled,
-                probe_timeout,
                 Some(&ha_vmids),
             )
             .await;

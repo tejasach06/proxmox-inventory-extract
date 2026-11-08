@@ -21,10 +21,24 @@ async fn spawn_live_pve_mock_server() -> (String, tokio::sync::oneshot::Sender<(
                 Ok((mut stream, _)) = listener.accept() => {
                     tokio::spawn(async move {
                         let mut buf = vec![0u8; 8192];
-                        let n = match stream.read(&mut buf).await {
+                        let mut n = match stream.read(&mut buf).await {
                             Ok(n) if n > 0 => n,
                             _ => return,
                         };
+                        // Drain the POST body so closing the socket does not reset the response.
+                        let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                        if let Some(head_end) = head.find("\r\n\r\n").map(|i| i + 4) {
+                            let content_len = head
+                                .lines()
+                                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            while n < head_end + content_len {
+                                match stream.read(&mut buf[n..]).await {
+                                    Ok(m) if m > 0 => n += m,
+                                    _ => break,
+                                }
+                            }
+                        }
                         let req_str = String::from_utf8_lossy(&buf[..n]);
                         let first_line = req_str.lines().next().unwrap_or("");
                         let parts: Vec<&str> = first_line.split_whitespace().collect();
@@ -241,13 +255,17 @@ async fn spawn_live_pve_mock_server() -> (String, tokio::sync::oneshot::Sender<(
                                 })
                                 .to_string(),
                             ),
-                            "/api2/json/nodes/pve/qemu/101/agent/get-host-name" => (
+                            "/api2/json/nodes/pve/qemu/101/agent/exec" => (
+                                "200 OK",
+                                json!({"data": {"pid": 4242}}).to_string(),
+                            ),
+                            "/api2/json/nodes/pve/qemu/101/agent/exec-status?pid=4242" => (
                                 "200 OK",
                                 json!({
                                     "data": {
-                                        "result": {
-                                            "host-name": "appServer"
-                                        }
+                                        "exited": 1,
+                                        "exitcode": 0,
+                                        "out-data": "VirtualHost configuration:\n*:80                   is a NameVirtualHost\n         default server app.example.com (/etc/apache2/sites-enabled/app.conf:1)\n         port 80 namevhost app.example.com (/etc/apache2/sites-enabled/app.conf:1)\n                 alias www.app.example.com\n    server_name api.example.com;\n"
                                     }
                                 })
                                 .to_string(),
@@ -332,7 +350,6 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 2,
         quiet: true,
     };
@@ -379,7 +396,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
     assert_eq!(r.get("memory_mb").unwrap(), "4096");
     assert_eq!(
         r.get("disks").unwrap(),
-        "vm-101-disk-0-efidisk0:1:ZPOOL:zfspool;vm-101-disk-1-scsi0:500:ZPOOL:zfspool"
+        "vm-101-disk-1-scsi0:500:ZPOOL:zfspool"
     );
     assert_eq!(r.get("storage_name").unwrap(), "ZPOOL");
     assert_eq!(r.get("storage_type").unwrap(), "zfspool");
@@ -393,7 +410,10 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         "13 (6.12.101+deb13-amd64)"
     );
     assert_eq!(r.get("private_ip").unwrap(), "192.168.1.25");
-    assert_eq!(r.get("fqdn").unwrap(), "");
+    assert_eq!(
+        r.get("virtual_hosts").unwrap(),
+        "api.example.com;app.example.com;www.app.example.com"
+    );
     assert_eq!(r.get("ha_enabled").unwrap(), "false");
     assert_eq!(r.get("backup_enabled").unwrap(), "false");
 
@@ -456,7 +476,6 @@ async fn test_live_pve_host_payload_end_to_end_api_token_auth() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 2,
         quiet: true,
     };

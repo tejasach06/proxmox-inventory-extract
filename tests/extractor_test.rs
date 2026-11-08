@@ -26,10 +26,24 @@ async fn spawn_mock_extractor_server_with_node_status(
                     let node_body_str = node_body.to_string();
                     tokio::spawn(async move {
                         let mut buf = vec![0u8; 8192];
-                        let n = match stream.read(&mut buf).await {
+                        let mut n = match stream.read(&mut buf).await {
                             Ok(n) if n > 0 => n,
                             _ => return,
                         };
+                        // Drain the POST body so closing the socket does not reset the response.
+                        let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                        if let Some(head_end) = head.find("\r\n\r\n").map(|i| i + 4) {
+                            let content_len = head
+                                .lines()
+                                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            while n < head_end + content_len {
+                                match stream.read(&mut buf[n..]).await {
+                                    Ok(m) if m > 0 => n += m,
+                                    _ => break,
+                                }
+                            }
+                        }
                         let req_str = String::from_utf8_lossy(&buf[..n]);
                         let first_line = req_str.lines().next().unwrap_or("");
                         let parts: Vec<&str> = first_line.split_whitespace().collect();
@@ -193,11 +207,17 @@ async fn spawn_mock_extractor_server_with_node_status(
                                     }
                                 }).to_string(),
                             ),
-                            "/api2/json/nodes/pve-node1/qemu/101/agent/get-host-name" => (
+                            "/api2/json/nodes/pve-node1/qemu/101/agent/exec" => (
+                                "200 OK",
+                                json!({"data": {"pid": 4242}}).to_string(),
+                            ),
+                            "/api2/json/nodes/pve-node1/qemu/101/agent/exec-status?pid=4242" => (
                                 "200 OK",
                                 json!({
                                     "data": {
-                                        "result": {"host-name": "vm-running.corp.local"}
+                                        "exited": 1,
+                                        "exitcode": 0,
+                                        "out-data": "VirtualHost configuration:\n*:80                   is a NameVirtualHost\n         default server app.example.com (/etc/apache2/sites-enabled/app.conf:1)\n         port 80 namevhost app.example.com (/etc/apache2/sites-enabled/app.conf:1)\n                 alias www.app.example.com\n    server_name api.example.com;\n"
                                     }
                                 }).to_string(),
                             ),
@@ -237,7 +257,6 @@ async fn spawn_mock_extractor_server_with_node_status(
                                         "cores": 2,
                                         "memory": 2048,
                                         "ostype": "other",
-                                        "searchdomain": "lab.example.org",
                                         "tags": "192.168.1.104;db"
                                     }
                                 }).to_string(),
@@ -315,9 +334,7 @@ async fn test_extract_vm_running_with_agent() {
         "pve-node1",
         None,
         None,
-        None,
         false,
-        2.0,
         Some(&ha_vmids),
     )
     .await
@@ -336,7 +353,10 @@ async fn test_extract_vm_running_with_agent() {
     assert_eq!(row.get("os_version").unwrap(), "12 (6.1.0-18-amd64)");
     assert_eq!(row.get("private_ip").unwrap(), "192.168.1.101");
     assert_eq!(row.get("backup_ip").unwrap(), "10.0.0.101");
-    assert_eq!(row.get("fqdn").unwrap(), "vm-running.corp.local");
+    assert_eq!(
+        row.get("virtual_hosts").unwrap(),
+        "api.example.com;app.example.com;www.app.example.com"
+    );
     assert_eq!(row.get("ha_enabled").unwrap(), "true");
     assert_eq!(row.get("backup_enabled").unwrap(), "true");
     assert_eq!(row.get("backup_location").unwrap(), "pbs-storage");
@@ -380,9 +400,7 @@ async fn test_extract_vm_stopped_with_cloudinit_ips() {
         "pve-node1",
         None,
         None,
-        None,
         false,
-        2.0,
         None,
     )
     .await
@@ -392,6 +410,7 @@ async fn test_extract_vm_stopped_with_cloudinit_ips() {
     assert_eq!(row.get("os_family").unwrap(), "windows");
     assert_eq!(row.get("private_ip").unwrap(), "192.168.1.102");
     assert_eq!(row.get("backup_ip").unwrap(), "");
+    assert_eq!(row.get("virtual_hosts").unwrap(), "");
     assert_eq!(row.get("ha_enabled").unwrap(), "false");
     assert_eq!(row.get("backup_enabled").unwrap(), "true");
 }
@@ -428,9 +447,7 @@ async fn test_extract_vm_template() {
         "pve-node1",
         None,
         None,
-        None,
         false,
-        2.0,
         None,
     )
     .await
@@ -472,9 +489,7 @@ async fn test_extract_vm_agentless_and_fallbacks() {
         "pve-node1",
         None,
         None,
-        None,
         false,
-        2.0,
         None,
     )
     .await
@@ -482,8 +497,8 @@ async fn test_extract_vm_agentless_and_fallbacks() {
 
     // Falls back to tag IP
     assert_eq!(row.get("private_ip").unwrap(), "192.168.1.104");
-    // FQDN falls back to searchdomain: name.searchdomain
-    assert_eq!(row.get("fqdn").unwrap(), "vm-agentless.lab.example.org");
+    // No live agent: virtual_hosts stays empty
+    assert_eq!(row.get("virtual_hosts").unwrap(), "");
     // Excluded from backup job 104
     assert_eq!(row.get("backup_enabled").unwrap(), "false");
 }
@@ -527,7 +542,7 @@ fn test_serialize_vm_direct() {
         &disks,
         &ips_by_role,
         &os_info,
-        Some("host.example.com"),
+        &["a.example.com".to_string(), "b.example.com".to_string()],
         "test desc",
         "tag1;tag2",
         &resource,
@@ -538,7 +553,7 @@ fn test_serialize_vm_direct() {
 
     assert_eq!(row.get("name").unwrap(), "custom-name");
     assert_eq!(row.get("external_id").unwrap(), "200");
-    assert_eq!(row.get("fqdn").unwrap(), "host.example.com");
+    assert_eq!(row.get("virtual_hosts").unwrap(), "a.example.com;b.example.com");
     assert_eq!(row.get("platform").unwrap(), "proxmox");
     assert_eq!(row.get("cluster").unwrap(), "clusterA");
     assert_eq!(row.get("node").unwrap(), "nodeA");
@@ -575,7 +590,6 @@ async fn test_orchestrator_deterministic_order_and_csv() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 4,
         quiet: true,
     };
@@ -589,7 +603,7 @@ async fn test_orchestrator_deterministic_order_and_csv() {
     assert!(lines.len() >= 5, "Header + 4 VM rows");
 
     // Row 1: VM 101
-    assert!(lines[1].starts_with("vm-running,101,"));
+    assert!(lines[1].starts_with("vm-running,101,api.example.com;app.example.com;www.app.example.com,"));
     // Row 2: VM 102
     assert!(lines[2].starts_with("vm-stopped,102,"));
     // Row 3: VM 103
@@ -609,7 +623,6 @@ async fn test_orchestrator_auth_failure_exit_1() {
         verify_ssl: false,
         timeout: 1,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 2,
         quiet: true,
     };
@@ -712,7 +725,6 @@ async fn test_orchestrator_partial_failure_exit_2() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 1,
         quiet: true,
     };
@@ -768,9 +780,6 @@ async fn test_extract_vm_local_probe_arp_and_dhcp() {
     let mut arp_map = HashMap::new();
     arp_map.insert("aa:bb:cc:dd:ee:01".to_string(), vec!["192.168.1.88".to_string()]);
 
-    let mut lease_hosts = HashMap::new();
-    lease_hosts.insert("aa:bb:cc:dd:ee:01".to_string(), "probed-vm.local.lan".to_string());
-
     let resource = json!({"vmid": 105, "name": "probed-vm"});
 
     let row = extract_vm(
@@ -786,9 +795,7 @@ async fn test_extract_vm_local_probe_arp_and_dhcp() {
         "local-pve",
         Some(&arp_map),
         None,
-        Some(&lease_hosts),
         true,
-        2.0,
         None,
     )
     .await
@@ -797,7 +804,6 @@ async fn test_extract_vm_local_probe_arp_and_dhcp() {
     let _ = shutdown_tx.send(());
 
     assert_eq!(row.get("private_ip").unwrap(), "192.168.1.88");
-    assert_eq!(row.get("fqdn").unwrap(), "probed-vm.local.lan");
 }
 
 #[tokio::test]
@@ -881,7 +887,6 @@ async fn test_orchestrator_node_enumeration_failure_exit_1() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
-        probe_timeout: 1.0,
         workers: 1,
         quiet: true,
     };

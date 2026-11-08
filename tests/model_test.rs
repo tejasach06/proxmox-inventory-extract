@@ -80,7 +80,8 @@ fn test_disk_record_to_csv_field() {
 fn test_parse_disks_cases() {
     let mut config = serde_json::Map::new();
     config.insert("scsi0".to_string(), json!("local-zfs:vm-100-disk-1,size=50G"));
-    config.insert("efidisk0".to_string(), json!("local-zfs:vm-100-disk-0,size=1G"));
+    config.insert("efidisk0".to_string(), json!("local-zfs:vm-100-disk-0,size=4M"));
+    config.insert("tpmstate0".to_string(), json!("local-zfs:vm-100-disk-3,size=4M,version=v2.0"));
     config.insert("scsihw".to_string(), json!("virtio-scsi-pci"));
     config.insert("ide2".to_string(), json!("local:iso/debian.iso,media=cdrom"));
     config.insert("unused0".to_string(), json!("none"));
@@ -102,30 +103,23 @@ fn test_parse_disks_cases() {
 
     let disks = parse_disks(&config, &storage_meta, &volume_sizes);
 
-    // efidisk0 sorted before scsi0, scsihw skipped, ide2 cdrom skipped, unused0 none skipped,
-    // scsi1 passthrough skipped, virtio0 uses fallback volume size 120
-    assert_eq!(disks.len(), 3);
+    // efidisk0/tpmstate0 firmware disks skipped, scsihw skipped, ide2 cdrom skipped,
+    // unused0 none skipped, scsi1 passthrough skipped, virtio0 uses fallback volume size 120
+    assert_eq!(disks.len(), 2);
 
-    // 1st: efidisk0
-    assert_eq!(disks[0].config_key, "efidisk0");
-    assert_eq!(disks[0].lv_name, "vm-100-disk-0");
-    assert_eq!(disks[0].size_gib, 1);
+    // 1st: scsi0
+    assert_eq!(disks[0].config_key, "scsi0");
+    assert_eq!(disks[0].lv_name, "vm-100-disk-1");
+    assert_eq!(disks[0].size_gib, 50);
     assert_eq!(disks[0].storage_name, "ZPOOL"); // vgname overrides storage_id
     assert_eq!(disks[0].storage_type, "zfspool");
 
-    // 2nd: scsi0
-    assert_eq!(disks[1].config_key, "scsi0");
-    assert_eq!(disks[1].lv_name, "vm-100-disk-1");
-    assert_eq!(disks[1].size_gib, 50);
-    assert_eq!(disks[1].storage_name, "ZPOOL");
-    assert_eq!(disks[1].storage_type, "zfspool");
-
-    // 3rd: virtio0
-    assert_eq!(disks[2].config_key, "virtio0");
-    assert_eq!(disks[2].lv_name, "vm-100-disk-2");
-    assert_eq!(disks[2].size_gib, 120);
-    assert_eq!(disks[2].storage_name, "ceph"); // vgname is empty, fallback to storage_id
-    assert_eq!(disks[2].storage_type, "rbd");
+    // 2nd: virtio0
+    assert_eq!(disks[1].config_key, "virtio0");
+    assert_eq!(disks[1].lv_name, "vm-100-disk-2");
+    assert_eq!(disks[1].size_gib, 120);
+    assert_eq!(disks[1].storage_name, "ceph"); // vgname is empty, fallback to storage_id
+    assert_eq!(disks[1].storage_type, "rbd");
 }
 
 #[test]

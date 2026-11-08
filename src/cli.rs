@@ -29,11 +29,8 @@ pub struct Args {
     #[arg(long = "timeout", default_value_t = API_TIMEOUT, help = "Per-request HTTP timeout in seconds")]
     pub timeout: u64,
 
-    #[arg(long = "no-probe", help = "Disable reverse DNS and local ARP/DHCP lease lookups")]
+    #[arg(long = "no-probe", help = "Disable local ARP/DHCP lease lookups")]
     pub no_probe: bool,
-
-    #[arg(long = "probe-timeout", default_value_t = 2.0, help = "Reverse DNS timeout in seconds")]
-    pub probe_timeout: f64,
 
     #[arg(long = "workers", default_value_t = 8, help = "Concurrent VM extraction workers")]
     pub workers: usize,

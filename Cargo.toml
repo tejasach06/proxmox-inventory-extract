@@ -14,7 +14,6 @@ regex = "1.10"
 chrono = "0.4"
 rpassword = "7.3"
 glob = "0.3"
-dns-lookup = "2.0"
 gethostname = "0.5"
 
 [dev-dependencies]

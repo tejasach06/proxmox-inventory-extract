@@ -4,6 +4,17 @@ Extract VM inventory from a Proxmox cluster via REST API and write a CSV compati
 
 Implemented in high-performance **Rust** with concurrent extraction workers.
 
+## Install
+
+Each `v*` tag publishes a static x86_64 Linux binary and a container image, both built on the VM101 runner:
+
+- Binary: `proxmox-inventory-extract-<tag>-x86_64-linux.tar.gz` on the GitHub Releases page.
+- Image: `ghcr.io/tejasach06/proxmox-inventory-extract:<tag>` (also `:latest`).
+
+```bash
+podman run --rm -e PVE_API_TOKEN -v "$PWD":/out:Z ghcr.io/tejasach06/proxmox-inventory-extract:latest -H pve:8006 -o /out/inv.csv
+```
+
 ## Build (Rust)
 
 Build the optimized release binary using Cargo:

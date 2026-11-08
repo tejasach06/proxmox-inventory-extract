@@ -15,14 +15,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test and build in podman
         run: |
-          podman run --rm \
-            -v "$PWD":/src:Z -w /src \
+          # The runner is itself a container talking to the host podman socket, so
+          # bind-mounting $PWD would resolve on the host; copy files in and out instead.
+          cid=$(podman create \
             -v cargo-registry:/usr/local/cargo/registry \
+            -e CARGO_BUILD_JOBS=1 -w /src \
             rust:1-alpine sh -euc '
               apk add --no-cache musl-dev
               cargo test --locked
               cargo build --release --locked
-            '
+            ')
+          trap 'podman rm -f "$cid" >/dev/null' EXIT
+          podman cp . "$cid":/src
+          podman start -a "$cid"
+          mkdir -p target/release
+          podman cp "$cid":/src/target/release/proxmox-inventory-extract target/release/
       - name: Package
         run: |
           name=proxmox-inventory-extract-${{ github.ref_name }}-x86_64-linux

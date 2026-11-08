@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 pub const API_TIMEOUT: u64 = 30;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "proxmox-inventory-extract", version = "2026-08-15")]
+#[command(name = "proxmox-inventory-extract", version)]
 #[command(about = "Extract Proxmox VM inventory as InventoryMGR-compatible CSV")]
 pub struct Args {
     #[arg(short = 'o', long = "output", help = "Output CSV path (default: /tmp/proxmox-inventory-<ts>.csv)")]

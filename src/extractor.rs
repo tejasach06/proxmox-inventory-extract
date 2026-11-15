@@ -335,6 +335,7 @@ pub async fn extract_vm(
     arp_map: Option<&HashMap<String, Vec<String>>>,
     lease_ips: Option<&HashMap<String, Vec<String>>>,
     probe_enabled: bool,
+    virtual_hosts_enabled: bool,
     ha_vmids: Option<&HashSet<u64>>,
 ) -> Option<HashMap<String, String>> {
     let config = match client.get_vm_config(node, vmid).await {
@@ -410,7 +411,7 @@ pub async fn extract_vm(
         os_info = client.get_guest_os(node, vmid).await;
         let guest_fam = os_info.get("os_family").and_then(|v| v.as_deref());
         let ostype = config.get("ostype").and_then(|v| v.as_str()).unwrap_or("");
-        if map_os_family(ostype, guest_fam) == "linux" {
+        if virtual_hosts_enabled && map_os_family(ostype, guest_fam) == "linux" {
             virtual_hosts = client.get_guest_virtual_hosts(node, vmid).await;
         }
     }
@@ -531,6 +532,7 @@ pub async fn run_orchestrator(args: Args) -> i32 {
     let local_hostname = gethostname::gethostname().to_string_lossy().to_string();
     let local_node = local_hostname.split('.').next().unwrap_or("").to_string();
     let probe_enabled = !args.no_probe;
+    let virtual_hosts_enabled = !args.no_virtual_hosts;
 
     let mut arp_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut lease_ips: HashMap<String, Vec<String>> = HashMap::new();
@@ -687,6 +689,7 @@ pub async fn run_orchestrator(args: Args) -> i32 {
                 Some(&arp_map),
                 Some(&lease_ips),
                 probe_enabled,
+                virtual_hosts_enabled,
                 Some(&ha_vmids),
             )
             .await;

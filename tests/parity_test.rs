@@ -350,6 +350,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 2,
         quiet: true,
     };
@@ -476,6 +477,7 @@ async fn test_live_pve_host_payload_end_to_end_api_token_auth() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 2,
         quiet: true,
     };

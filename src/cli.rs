@@ -32,6 +32,12 @@ pub struct Args {
     #[arg(long = "no-probe", help = "Disable local ARP/DHCP lease lookups")]
     pub no_probe: bool,
 
+    #[arg(
+        long = "no-virtual-hosts",
+        help = "Disable guest-agent virtual host discovery"
+    )]
+    pub no_virtual_hosts: bool,
+
     #[arg(long = "workers", default_value_t = 8, help = "Concurrent VM extraction workers")]
     pub workers: usize,
 

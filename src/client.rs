@@ -514,7 +514,7 @@ impl ProxmoxClient {
         }
     }
 
-    /// Lists web vhosts served by the guest via `/agent/exec` (apachectl -S, nginx -T). Soft-fails to empty.
+    /// Lists configured web vhosts via `/agent/exec` (apachectl -S, nginx -T). Soft-fails to empty.
     pub async fn get_guest_virtual_hosts(&self, node: &str, vmid: u64) -> Vec<String> {
         let base = format!("/api2/json/nodes/{}/qemu/{}/agent", node, vmid);
         let form = [

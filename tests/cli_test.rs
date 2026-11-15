@@ -11,8 +11,16 @@ fn test_cli_defaults() {
     assert_eq!(args.timeout, 30);
     assert_eq!(args.workers, 8);
     assert!(!args.no_probe);
+    assert!(!args.no_virtual_hosts);
     assert!(!args.quiet);
     assert!(args.output.is_none());
+}
+
+#[test]
+fn test_cli_no_virtual_hosts() {
+    let args = Args::parse_from(["proxmox-inventory-extract", "--no-virtual-hosts"]);
+    assert!(args.no_virtual_hosts);
+    assert!(!args.no_probe);
 }
 
 #[test]

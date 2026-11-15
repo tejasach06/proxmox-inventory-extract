@@ -7,12 +7,15 @@ use proxmox_inventory_extract::extractor::{
 use proxmox_inventory_extract::model::DiskRecord;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 async fn spawn_mock_extractor_server_with_node_status(
     node_status: &'static str,
     node_body: serde_json::Value,
+    exec_requests: Arc<AtomicUsize>,
 ) -> (String, tokio::sync::oneshot::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -24,6 +27,7 @@ async fn spawn_mock_extractor_server_with_node_status(
                 _ = &mut shutdown_rx => break,
                 Ok((mut stream, _)) = listener.accept() => {
                     let node_body_str = node_body.to_string();
+                    let exec_requests = exec_requests.clone();
                     tokio::spawn(async move {
                         let mut buf = vec![0u8; 8192];
                         let mut n = match stream.read(&mut buf).await {
@@ -51,6 +55,9 @@ async fn spawn_mock_extractor_server_with_node_status(
                             return;
                         }
                         let path = parts[1];
+                        if path.contains("/agent/exec") {
+                            exec_requests.fetch_add(1, Ordering::SeqCst);
+                        }
 
                         let (status, body) = match path {
                             "/api2/json/access/ticket" => (
@@ -292,6 +299,7 @@ async fn spawn_mock_extractor_server() -> (String, tokio::sync::oneshot::Sender<
                 {"node": "pve-node1", "status": "online"}
             ]
         }),
+        Arc::new(AtomicUsize::new(0)),
     )
     .await
 }
@@ -335,6 +343,7 @@ async fn test_extract_vm_running_with_agent() {
         None,
         None,
         false,
+        true,
         Some(&ha_vmids),
     )
     .await
@@ -401,6 +410,7 @@ async fn test_extract_vm_stopped_with_cloudinit_ips() {
         None,
         None,
         false,
+        true,
         None,
     )
     .await
@@ -448,6 +458,7 @@ async fn test_extract_vm_template() {
         None,
         None,
         false,
+        true,
         None,
     )
     .await
@@ -490,6 +501,7 @@ async fn test_extract_vm_agentless_and_fallbacks() {
         None,
         None,
         false,
+        true,
         None,
     )
     .await
@@ -590,6 +602,7 @@ async fn test_orchestrator_deterministic_order_and_csv() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 4,
         quiet: true,
     };
@@ -613,6 +626,54 @@ async fn test_orchestrator_deterministic_order_and_csv() {
 }
 
 #[tokio::test]
+async fn test_orchestrator_no_virtual_hosts_preserves_inventory() {
+    let exec_requests = Arc::new(AtomicUsize::new(0));
+    let (server_url, _shutdown) = spawn_mock_extractor_server_with_node_status(
+        "200 OK",
+        json!({"data": [{"node": "pve-node1", "status": "online"}]}),
+        exec_requests.clone(),
+    )
+    .await;
+    let temp_csv = tempfile::NamedTempFile::new().unwrap();
+    let args = Args {
+        output: Some(temp_csv.path().to_str().unwrap().to_string()),
+        host: server_url,
+        user: "root@pam".to_string(),
+        password: Some("secret".to_string()),
+        api_token: None,
+        verify_ssl: false,
+        timeout: 5,
+        no_probe: true,
+        no_virtual_hosts: true,
+        workers: 4,
+        quiet: true,
+    };
+
+    assert_eq!(run_orchestrator(args).await, 0);
+    assert_eq!(exec_requests.load(Ordering::SeqCst), 0);
+
+    let mut reader = csv::Reader::from_path(temp_csv.path()).unwrap();
+    assert_eq!(
+        reader.headers().unwrap().iter().collect::<Vec<_>>(),
+        proxmox_inventory_extract::model::TEMPLATE_COLUMNS
+    );
+    let rows: Vec<HashMap<String, String>> = reader.deserialize().map(Result::unwrap).collect();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["external_id"].as_str())
+            .collect::<Vec<_>>(),
+        ["101", "102", "103", "104"]
+    );
+    assert!(rows.iter().all(|row| row["virtual_hosts"].is_empty()));
+    let running = &rows[0];
+    assert_eq!(running["private_ip"], "192.168.1.101");
+    assert_eq!(running["backup_ip"], "10.0.0.101");
+    assert_eq!(running["os_distribution"], "Debian GNU/Linux 12 (bookworm)");
+    assert_eq!(running["os_version"], "12 (6.1.0-18-amd64)");
+    assert!(!running["disks"].is_empty());
+}
+
+#[tokio::test]
 async fn test_orchestrator_auth_failure_exit_1() {
     let args = Args {
         output: None,
@@ -623,6 +684,7 @@ async fn test_orchestrator_auth_failure_exit_1() {
         verify_ssl: false,
         timeout: 1,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 2,
         quiet: true,
     };
@@ -725,6 +787,7 @@ async fn test_orchestrator_partial_failure_exit_2() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 1,
         quiet: true,
     };
@@ -795,6 +858,7 @@ async fn test_extract_vm_local_probe_arp_and_dhcp() {
         "local-pve",
         Some(&arp_map),
         None,
+        true,
         true,
         None,
     )
@@ -875,6 +939,7 @@ async fn test_orchestrator_node_enumeration_failure_exit_1() {
     let (server_url, shutdown_tx) = spawn_mock_extractor_server_with_node_status(
         "500 Internal Server Error",
         json!({"message": "nodes failure"}),
+        Arc::new(AtomicUsize::new(0)),
     )
     .await;
 
@@ -887,6 +952,7 @@ async fn test_orchestrator_node_enumeration_failure_exit_1() {
         verify_ssl: false,
         timeout: 5,
         no_probe: true,
+        no_virtual_hosts: false,
         workers: 1,
         quiet: true,
     };

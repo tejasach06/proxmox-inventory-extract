@@ -70,6 +70,7 @@ export PVE_API_TOKEN="root@pam!inventory=12345678-1234-1234-1234-123456789abc"
 | `--verify-ssl` | Verify the Proxmox TLS certificate | skipped (Proxmox ships a self-signed cert) |
 | `--timeout SECONDS` | Per-request HTTP timeout in seconds | `30` |
 | `--no-probe` | Disable local ARP/DHCP lease lookups | probing enabled |
+| `--no-virtual-hosts` | Disable guest-agent virtual host discovery | discovery enabled |
 | `--workers N` | Concurrent VM extraction workers and per-node storage-content requests | `8` |
 | `--quiet` | Suppress the progress line | progress shown on a TTY |
 | `-V, --version` | Show version and exit | None |
@@ -173,10 +174,11 @@ Fallback: if guest agent is not available, IPs are extracted from Proxmox `tags`
 
 ## Virtual Hosts Behavior
 
-`virtual_hosts` lists the Apache/nginx virtual hosts served by the VM, joined with `;`. One VM can host many sites.
+`virtual_hosts` lists configured Apache/nginx virtual host names discovered inside the VM, joined with `;`. Discovery does not prove that the web service is running or that the sites are reachable. Custom configuration paths and web servers inside containers may not be discovered.
 
 - **Source**: QEMU guest agent `agent/exec` runs `apachectl -S` (or `apache2ctl`/`httpd`) and `nginx -T`, then extracts `namevhost`/`alias`/`server_name` names.
 - **Requirements**: VM `running`, qemu-guest-agent responding, resolved `os_family` is `linux`.
+- **Control**: discovery is enabled by default. Pass `--no-virtual-hosts` to skip virtual host execution and leave the column empty. Other guest-agent inventory remains enabled. This option is independent of `--no-probe`.
 - **Permissions**: on PVE 9 the token/user needs `VM.GuestAgent.Unrestricted` (older PVE: `Sys.Modify` or `VM.Monitor`) for agent exec.
 - **Otherwise**: the column is empty. There is no hostname, DHCP, reverse DNS or searchdomain fallback.
 
@@ -277,6 +279,7 @@ Priority: Guest Agent `osinfo` > VM config `ostype` mapping > `linux`.
 
 ### Virtual Hosts
 Source: guest agent exec of `apachectl -S` / `apache2ctl -S` / `httpd -S` plus `nginx -T` `server_name` lines. Names are lowercased, deduplicated, sorted, joined with `;`.
+- Reports configured names, without proving that a web service is running or reachable. Discovery is enabled by default; `--no-virtual-hosts` skips it and leaves the column empty.
 - Requires a running VM, qemu-guest-agent, and a Linux guest.
 - On PVE 9 the token/user needs `VM.GuestAgent.Unrestricted` (older PVE: `Sys.Modify` / `VM.Monitor`) for agent exec.
 - Empty otherwise; no DNS or DHCP fallback.

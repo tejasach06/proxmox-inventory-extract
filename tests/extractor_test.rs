@@ -961,3 +961,11 @@ async fn test_orchestrator_node_enumeration_failure_exit_1() {
     let _ = shutdown_tx.send(());
     assert_eq!(exit_code, 1, "Failed node enumeration must return exit code 1");
 }
+
+#[test]
+fn test_map_status_only_importable_values() {
+    use proxmox_inventory_extract::extractor::map_status;
+    for (pve, want) in [("running", "running"), ("stopped", "powered_off"), ("paused", "powered_off"), ("", "powered_off")] {
+        assert_eq!(map_status(pve), want);
+    }
+}

@@ -6,10 +6,7 @@ use std::io;
 use std::sync::LazyLock;
 
 pub const ENUM_COLUMNS: &[(&str, &[&str])] = &[
-    (
-        "status",
-        &["running", "powered_off", "decommissioned", "unknown"],
-    ),
+    ("status", &["running", "powered_off", "decommissioned"]),
     (
         "environment",
         &[
@@ -90,6 +87,16 @@ pub fn sanitize_row(row: &mut HashMap<String, String>) -> Vec<String> {
         }
     }
 
+    // The importer rejects the whole row if virtual_hosts exceeds these limits.
+    if let Some(val) = row.get("virtual_hosts").filter(|v| !v.is_empty()) {
+        let hosts: Vec<&str> = val.split(';').filter(|h| h.chars().count() <= 255).collect();
+        if hosts.len() > 100 || hosts.len() != val.split(';').count() {
+            let kept = hosts.iter().take(100).copied().collect::<Vec<_>>().join(";");
+            warnings.push("virtual_hosts over importer limits (255 chars, 100 entries), trimmed".to_string());
+            row.insert("virtual_hosts".to_string(), kept);
+        }
+    }
+
     for &col in REQUIRED_COLUMNS {
         let is_blank = row.get(col).map(|s| s.trim().is_empty()).unwrap_or(true);
         if is_blank {
@@ -105,6 +112,12 @@ pub fn write_csv(
     rows: &[HashMap<String, String>],
     output_path: &str,
 ) -> Result<(), std::io::Error> {
+    if rows.len() > 5000 {
+        eprintln!(
+            "[warn] {} rows; InventoryMGR rejects imports over 5000 rows or 5 MiB, split the file",
+            rows.len()
+        );
+    }
     let file = File::create(output_path)?;
     let mut writer = csv::WriterBuilder::new().from_writer(file);
 

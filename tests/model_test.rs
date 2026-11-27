@@ -4,10 +4,12 @@ use proxmox_inventory_extract::model::*;
 
 #[test]
 fn test_template_columns_count() {
-    assert_eq!(TEMPLATE_COLUMNS.len(), 39);
+    assert_eq!(TEMPLATE_COLUMNS.len(), 40);
     assert_eq!(TEMPLATE_COLUMNS[0], "name");
     assert_eq!(TEMPLATE_COLUMNS[14], "disks");
-    assert_eq!(TEMPLATE_COLUMNS[38], "description");
+    assert_eq!(TEMPLATE_COLUMNS[22], "backup_ip");
+    assert_eq!(TEMPLATE_COLUMNS[23], "ip_mappings");
+    assert_eq!(TEMPLATE_COLUMNS[39], "description");
 }
 
 #[test]

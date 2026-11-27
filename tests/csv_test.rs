@@ -167,3 +167,13 @@ fn test_write_csv_escapes_special_characters() {
         .unwrap();
     assert_eq!(&record[desc_idx], "Line 1\nLine 2 with \"quotes\"");
 }
+
+#[test]
+fn test_sanitize_trims_virtual_hosts_over_importer_limits() {
+    let mut row = std::collections::HashMap::new();
+    let many: Vec<String> = (0..101).map(|i| format!("h{i}.example.com")).collect();
+    row.insert("virtual_hosts".to_string(), many.join(";"));
+    let w = proxmox_inventory_extract::csv::sanitize_row(&mut row);
+    assert!(w.iter().any(|m| m.contains("virtual_hosts")));
+    assert_eq!(row["virtual_hosts"].split(';').count(), 100);
+}

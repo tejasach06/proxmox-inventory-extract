@@ -6,14 +6,8 @@ Implemented in high-performance **Rust** with concurrent extraction workers.
 
 ## Install
 
-Each `v*` tag publishes a static x86_64 Linux binary and a container image, both built on the VM101 runner:
-
-- Binary: `proxmox-inventory-extract-<tag>-x86_64-linux.tar.gz` on the GitHub Releases page.
-- Image: `ghcr.io/tejasach06/proxmox-inventory-extract:<tag>` (also `:latest`).
-
-```bash
-podman run --rm -e PVE_API_TOKEN -v "$PWD":/out:Z ghcr.io/tejasach06/proxmox-inventory-extract:latest -H pve:8006 -o /out/inv.csv
-```
+Each `v*` tag publishes a static x86_64 Linux binary, built on the VM101 runner:
+`proxmox-inventory-extract-<tag>-x86_64-linux.tar.gz` on the GitHub Releases page.
 
 ## Build (Rust)
 
@@ -88,7 +82,7 @@ Credentials are automatically resolved according to strict precedence:
 
 ## Output CSV Schema
 
-Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
+Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (40 columns in fixed order):
 
 | Column | Source |
 |--------|--------|
@@ -100,7 +94,7 @@ Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
 | `datacenter` | *(empty - not available from Proxmox)* |
 | `cluster` | `/cluster/status` name or `standalone` |
 | `node` | Proxmox node name |
-| `status` | `running` / `powered_off` / `unknown` (from Proxmox status) |
+| `status` | `running` for Proxmox `running`, else `powered_off` (the importer accepts only `running`, `powered_off` and `decommissioned`) |
 | `environment` | *(empty - not available from Proxmox)* |
 | `criticality` | *(empty - not available from Proxmox)* |
 | `vm_type` | *(empty - not available from Proxmox)* |
@@ -115,6 +109,7 @@ Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
 | `private_ip` | Guest agent IPs starting with `172.` (or unmatched) |
 | `public_ip` | Guest agent IPs starting with `202.` |
 | `backup_ip` | Guest agent IPs starting with `10.` |
+| `ip_mappings` | *(empty - the importer needs both endpoints to already exist on the VM)* |
 | `owner` | *(empty - not available from Proxmox)* |
 | `business_owner` | *(empty - not available from Proxmox)* |
 | `technical_owner` | *(empty - not available from Proxmox)* |
@@ -132,7 +127,7 @@ Matches InventoryMGR's `TEMPLATE_COLUMNS` exactly (39 columns in fixed order):
 | `security_remarks` | *(empty - not available from Proxmox)* |
 | `description` | Proxmox VM config `description` field verbatim |
 
-All 39 InventoryMGR columns are emitted; unused columns are empty strings.
+All 40 InventoryMGR columns are emitted; unused columns are empty strings.
 
 ## Disk Format
 
@@ -235,7 +230,7 @@ inventorymgr import /tmp/inventory.csv
 ## Contract Testing
 
 The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates that the generated CSV strictly conforms to InventoryMGR's import requirements:
-- All 39 `TEMPLATE_COLUMNS` present in exact order
+- All 40 `TEMPLATE_COLUMNS` present in exact order
 - Correct RFC 4180 quoting and CRLF / LF line endings
 - Valid enum values for `status`, `os_family`, `storage_type`, etc.
 - Boolean fields are lowercase `true` / `false`
@@ -257,7 +252,7 @@ The Rust test suite (`tests/csv_test.rs` and `tests/parity_test.rs`) validates t
    - Guest hostname: `/agent/get-host-name`
 8. **Parse disks & calculate storage**: extract LV name, size, storage from config keys (`scsi*`, `virtio*`, `sata*`, `ide*`, `efidisk*`, `tpmstate*`)
 9. **Build & sanitize CSV row**: validate data types and blank invalid enum values
-10. **Write CSV**: emit all 39 columns in exact RFC 4180 format
+10. **Write CSV**: emit all 40 columns in exact RFC 4180 format
 
 ## Special Handling
 

@@ -365,7 +365,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         .from_path(&csv_path)
         .expect("CSV must be readable");
 
-    // Verify all 39 header columns match TEMPLATE_COLUMNS in exact order
+    // Verify all 40 header columns match TEMPLATE_COLUMNS in exact order
     let headers: Vec<String> = rdr
         .headers()
         .unwrap()
@@ -374,7 +374,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         .collect();
     let expected_headers: Vec<String> = TEMPLATE_COLUMNS.iter().map(|&s| s.to_string()).collect();
     assert_eq!(headers, expected_headers, "CSV headers must match TEMPLATE_COLUMNS exactly");
-    assert_eq!(headers.len(), 39);
+    assert_eq!(headers.len(), 40);
 
     // Verify records
     let mut records: Vec<HashMap<String, String>> = Vec::new();
@@ -427,6 +427,7 @@ async fn test_live_pve_host_payload_end_to_end_ticket_auth() {
         "vm_type",
         "public_ip",
         "backup_ip",
+        "ip_mappings",
         "owner",
         "business_owner",
         "technical_owner",

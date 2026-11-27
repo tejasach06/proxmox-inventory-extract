@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-pub const TEMPLATE_COLUMNS: [&str; 39] = [
+pub const TEMPLATE_COLUMNS: [&str; 40] = [
     "name",
     "external_id",
     "virtual_hosts",
@@ -28,6 +28,7 @@ pub const TEMPLATE_COLUMNS: [&str; 39] = [
     "private_ip",
     "public_ip",
     "backup_ip",
+    "ip_mappings",
     "owner",
     "business_owner",
     "technical_owner",

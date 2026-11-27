@@ -13,7 +13,8 @@ pub fn map_status(status: &str) -> &'static str {
     match status {
         "running" => "running",
         "stopped" => "powered_off",
-        _ => "unknown",
+        // The importer accepts only running, powered_off and decommissioned.
+        _ => "powered_off",
     }
 }
 
@@ -252,6 +253,8 @@ pub fn serialize_vm(
         .map(|v| v.join(";"))
         .unwrap_or_default();
     row.insert("backup_ip".to_string(), backup_ips);
+    // The importer needs both endpoints to already exist on the VM; never guess.
+    row.insert("ip_mappings".to_string(), String::new());
 
     // Ownership
     row.insert("owner".to_string(), String::new());

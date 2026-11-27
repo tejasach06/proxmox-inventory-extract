@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`proxmox-inventory-extract` is a single-crate Rust CLI. It reads QEMU VM inventory from a Proxmox VE cluster over the REST API and writes a CSV that matches InventoryMGR's bulk-import schema (39 fixed columns). The project is Rust only; the earlier Python implementation was removed, so do not reintroduce Python scripts or tooling. `README.md` holds the user-facing details: flags, CSV column sources, disk format and exit codes. Keep it in sync when behavior changes.
+`proxmox-inventory-extract` is a single-crate Rust CLI. It reads QEMU VM inventory from a Proxmox VE cluster over the REST API and writes a CSV that matches InventoryMGR's bulk-import schema (40 fixed columns). The project is Rust only; the earlier Python implementation was removed, so do not reintroduce Python scripts or tooling. `README.md` holds the user-facing details: flags, CSV column sources, disk format and exit codes. Keep it in sync when behavior changes.
 
 ## Architecture & Data Flow
 
@@ -108,7 +108,7 @@ PVE_API_TOKEN='root@pam!inv=<uuid>' ./target/release/proxmox-inventory-extract -
 - `parity_test.rs` runs two end-to-end `run_orchestrator` cases, one with ticket auth and one with API-token auth. The mock replays payloads captured from a live PVE 9.2.10 host, and the output must match that host's behavior exactly.
 - Orchestrator tests build `Args` as a full struct literal (`no_probe: true`, `quiet: true`, `workers: 2`, `timeout: 5`). Adding a field to `Args` means updating every one of those literals.
 - `csv_test.rs` and `parity_test.rs` are the contract tests:
-  - all 39 columns are present, in order;
+  - all 40 columns are present, in order;
   - RFC 4180 quoting;
   - enum, boolean and integer validity.
 - `probe_test.rs` writes Linux-format ARP and lease fixtures to temp files.
